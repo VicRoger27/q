@@ -14,6 +14,8 @@ import {
   EyeOff,
   ExternalLink,
   Info,
+  Github,
+  KeyRound,
 } from 'lucide-react';
 import { ShareItem } from '../types';
 import { formatBytes, formatDate } from '../utils/formatters';
@@ -44,7 +46,6 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
   const [downloadStarted, setDownloadStarted] = useState(false);
   const [copiedHash, setCopiedHash] = useState(false);
 
-  // Fetch file info
   useEffect(() => {
     let isMounted = true;
     async function fetchInfo() {
@@ -77,7 +78,6 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     };
   }, [shareId]);
 
-  // Lockout countdown timer
   useEffect(() => {
     if (lockoutSeconds <= 0) return;
     const timer = setInterval(() => {
@@ -127,9 +127,8 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     if (!accessToken && !shareInfo) return;
     setDownloadStarted(true);
 
-    const downloadUrl = `/api/shares/${shareId}/download?token=${encodeURIComponent(accessToken || '')}`;
+    const downloadUrl = `/api/shares/${shareId}/download?token=${encodeURIComponent(accessToken || '')}&pwd=${encodeURIComponent(password)}`;
 
-    // Trigger native browser download
     const link = document.createElement('a');
     link.href = downloadUrl;
     link.setAttribute('download', shareInfo?.filename || 'download');
@@ -137,7 +136,6 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     link.click();
     document.body.removeChild(link);
 
-    // Update download counter locally
     if (shareInfo) {
       setShareInfo({
         ...shareInfo,
@@ -194,6 +192,8 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     );
   }
 
+  const isGitHub = shareInfo.sourceType === 'github';
+
   return (
     <div className={`w-full max-w-xl mx-auto ${isEmbed ? 'p-3' : 'py-10 px-4 sm:px-6'}`}>
       <div className="bg-white border border-neutral-200 rounded-xl shadow-xs overflow-hidden">
@@ -202,7 +202,9 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-3.5 min-w-0">
               <div className="w-11 h-11 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
-                {shareInfo.isFolder ? (
+                {isGitHub ? (
+                  <Github className="w-5 h-5 text-emerald-400" />
+                ) : shareInfo.isFolder ? (
                   <FolderArchive className="w-5 h-5 text-emerald-400" />
                 ) : (
                   <FileArchive className="w-5 h-5 text-emerald-400" />
@@ -212,8 +214,13 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                 <div className="text-base font-bold text-neutral-900 truncate">
                   {shareInfo.title || shareInfo.filename}
                 </div>
-                <div className="text-xs text-neutral-500 font-mono truncate mt-0.5">
-                  {shareInfo.filename}
+                <div className="text-xs text-neutral-500 font-mono truncate mt-0.5 flex items-center gap-1.5">
+                  <span>{shareInfo.filename}</span>
+                  {shareInfo.githubReleaseTag && (
+                    <span className="text-[10px] text-neutral-500 bg-neutral-200/70 px-1.5 py-0.2 rounded font-sans">
+                      {shareInfo.githubReleaseTag}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-neutral-500 mt-1 font-mono tabular-nums">
                   <span className="font-semibold text-neutral-700">{formatBytes(shareInfo.fileSize)}</span>
@@ -224,7 +231,7 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
             </div>
 
             {/* Status indicator */}
-            <div className="shrink-0">
+            <div className="shrink-0 flex flex-col items-end gap-1">
               {accessToken ? (
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-md">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -235,6 +242,12 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                   <Lock className="w-3.5 h-3.5 text-neutral-500" />
                   <span>Protected</span>
                 </div>
+              )}
+
+              {shareInfo.isEncrypted && (
+                <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50/80 px-1.5 py-0.5 rounded">
+                  AES-256
+                </span>
               )}
             </div>
           </div>
@@ -279,8 +292,13 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                <p className="text-[11px] text-neutral-500 mt-1.5">
-                  This download is restricted to authorized recipients with the password.
+                <p className="text-[11px] text-neutral-500 mt-1.5 flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-neutral-400" />
+                  <span>
+                    {isGitHub
+                      ? 'Secure GitHub CDN token gate with anti-bruteforce protection.'
+                      : 'AES-256 decryption key is derived directly from your password.'}
+                  </span>
                 </p>
               </div>
 
@@ -328,10 +346,12 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                   <Check className="w-6 h-6 stroke-[2.5]" />
                 </div>
                 <h3 className="text-base font-bold text-neutral-900">
-                  Password Verified — File Ready
+                  Password Verified — Ready for Download
                 </h3>
                 <p className="text-xs text-neutral-500 mt-0.5">
-                  Your direct download link is authorized and active for 2 hours.
+                  {shareInfo.isEncrypted
+                    ? 'Decrypted on-the-fly via AES-256 stream directly to your device.'
+                    : 'Direct stream authorized from high-speed CDN.'}
                 </p>
               </div>
 
@@ -345,7 +365,7 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                 </span>
               </button>
 
-              {/* SHA-256 Checksum for security assurance */}
+              {/* SHA-256 Checksum */}
               {shareInfo.checksumSha256 && (
                 <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg text-left">
                   <div className="flex items-center justify-between text-[11px] text-neutral-500 mb-1">
@@ -375,7 +395,7 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
 
               <div className="flex items-center justify-between text-[11px] text-neutral-500 pt-1 font-mono tabular-nums">
                 <span>Total downloads: {shareInfo.downloadCount}</span>
-                <span>Protected by VaultDrop</span>
+                <span>Protected by VaultDrop · q.vopple.uk</span>
               </div>
             </div>
           )}

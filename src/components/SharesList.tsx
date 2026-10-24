@@ -13,6 +13,8 @@ import {
   Copy,
   AlertCircle,
   RefreshCw,
+  Github,
+  Lock,
 } from 'lucide-react';
 import { ShareItem } from '../types';
 import { formatBytes, formatDate } from '../utils/formatters';
@@ -31,7 +33,6 @@ export const SharesList: React.FC<SharesListProps> = ({
   const [shares, setShares] = useState<ShareItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchShares = async () => {
@@ -54,7 +55,7 @@ export const SharesList: React.FC<SharesListProps> = ({
   }, []);
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}"? This will permanently delete the file and invalidate all download links.`)) {
+    if (!window.confirm(`Are you sure you want to delete "${name}"? This will invalidate all download links.`)) {
       return;
     }
 
@@ -91,7 +92,7 @@ export const SharesList: React.FC<SharesListProps> = ({
             Active Files & Download Links
           </h1>
           <p className="text-xs sm:text-sm text-neutral-500 mt-1">
-            Manage your password-protected archives, copy embed codes, and monitor downloads.
+            Manage your password-protected archives (up to 1GB), copy embed codes, and monitor downloads.
           </p>
         </div>
 
@@ -131,7 +132,7 @@ export const SharesList: React.FC<SharesListProps> = ({
         {loading && shares.length === 0 ? (
           <div className="py-16 text-center text-xs text-neutral-500">
             <div className="animate-spin w-6 h-6 border-2 border-neutral-900 border-t-transparent rounded-full mx-auto mb-2" />
-            Loading uploaded files...
+            Loading files...
           </div>
         ) : filteredShares.length === 0 ? (
           <div className="py-16 px-4 text-center">
@@ -140,14 +141,14 @@ export const SharesList: React.FC<SharesListProps> = ({
             </div>
             <h3 className="text-sm font-semibold text-neutral-900">No shares found</h3>
             <p className="text-xs text-neutral-500 mt-1 max-w-sm mx-auto">
-              {searchQuery ? 'No files match your search query.' : 'You have not uploaded any files yet.'}
+              {searchQuery ? 'No files match your search query.' : 'You have not added any files or GitHub repos yet.'}
             </p>
             {!searchQuery && (
               <button
                 onClick={onNewUpload}
                 className="mt-4 px-4 py-2 text-xs font-semibold text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
               >
-                Upload a 500MB File Now
+                Upload a 1GB File or Link GitHub TARGET.zip
               </button>
             )}
           </div>
@@ -158,9 +159,10 @@ export const SharesList: React.FC<SharesListProps> = ({
                 <tr className="border-b border-neutral-200 bg-neutral-50/80 text-[11px] font-bold text-neutral-600 uppercase tracking-wider">
                   <th className="py-3 px-4">File / Title</th>
                   <th className="py-3 px-4">File Size</th>
-                  <th className="py-3 px-4">Password Protection</th>
+                  <th className="py-3 px-4">Storage Source</th>
+                  <th className="py-3 px-4">Security</th>
                   <th className="py-3 px-4">Downloads</th>
-                  <th className="py-3 px-4">Created Date</th>
+                  <th className="py-3 px-4">Created</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -171,7 +173,9 @@ export const SharesList: React.FC<SharesListProps> = ({
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-lg bg-neutral-100 flex items-center justify-center shrink-0">
-                          {share.isFolder ? (
+                          {share.sourceType === 'github' ? (
+                            <Github className="w-4 h-4 text-neutral-900" />
+                          ) : share.isFolder ? (
                             <FolderArchive className="w-4 h-4 text-emerald-600" />
                           ) : (
                             <FileArchive className="w-4 h-4 text-neutral-700" />
@@ -193,9 +197,24 @@ export const SharesList: React.FC<SharesListProps> = ({
                       {formatBytes(share.fileSize)}
                     </td>
 
+                    {/* Storage Source */}
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      {share.sourceType === 'github' ? (
+                        <div className="flex items-center gap-1.5 text-[11px] text-neutral-700">
+                          <Github className="w-3.5 h-3.5 text-neutral-800" />
+                          <span>GitHub CDN (Zero Cost)</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[11px] text-emerald-800">
+                          <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>AES-256 Encrypted Vault</span>
+                        </div>
+                      )}
+                    </td>
+
                     {/* Password Protection */}
                     <td className="py-3.5 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800">
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-neutral-800">
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                         <span>Password Required</span>
                       </div>

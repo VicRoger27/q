@@ -2,8 +2,8 @@ import React from 'react';
 import { Shield, Upload, FileCode2, HardDrive, Globe } from 'lucide-react';
 
 interface NavbarProps {
-  activeTab: 'upload' | 'shares' | 'embed' | 'docs';
-  onSelectTab: (tab: 'upload' | 'shares' | 'embed' | 'docs') => void;
+  activeTab: 'upload' | 'shares' | 'embed' | 'docs' | 'config';
+  onSelectTab: (tab: 'upload' | 'shares' | 'embed' | 'docs' | 'config') => void;
   domain: string;
 }
 
@@ -70,7 +70,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab, domain }
                 : 'hover:text-neutral-900'
             }`}
           >
-            Security & Domains
+            Domain Setup
+          </button>
+          <button
+            onClick={() => onSelectTab('config')}
+            className={`whitespace-nowrap transition-colors py-1 cursor-pointer ${
+              activeTab === 'config'
+                ? 'text-neutral-950 font-semibold border-b-2 border-neutral-900'
+                : 'hover:text-neutral-900'
+            }`}
+          >
+            Config (YAML/JSON)
           </button>
         </nav>
 

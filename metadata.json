@@ -2,5 +2,7 @@
   "name": "VaultDrop - Password Protected File & Folder Sharing",
   "description": "Securely host and share files up to 500MB+ with password protection, custom q.vopple.uk links, live iframe embed code generation, and download analytics.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

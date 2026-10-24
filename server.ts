@@ -22,7 +22,7 @@ const SHARES_FILE = path.join(DATA_DIR, 'shares.json');
   }
 });
 
-interface ShareRecord {
+export interface ShareRecord {
   id: string;
   filename: string;
   fileSize: number;
@@ -33,10 +33,15 @@ interface ShareRecord {
   expiresAt: string | null;
   passwordSalt: string;
   passwordHash: string;
-  checksumSha256: string;
+  checksumSha256?: string;
   downloadCount: number;
   isFolder: boolean;
   totalChunks?: number;
+  isEncrypted?: boolean;
+  sourceType: 'local_encrypted' | 'github';
+  githubDownloadUrl?: string;
+  githubRepo?: string;
+  githubReleaseTag?: string;
 }
 
 // In-memory rate limiting for password attempts: key = `${shareId}:${ip}` -> { count: number, lockedUntil: number }
@@ -55,31 +60,38 @@ function loadShares(): ShareRecord[] {
       if (!fs.existsSync(demoDir)) {
         fs.mkdirSync(demoDir, { recursive: true });
       }
-      const demoFile = path.join(demoDir, 'Portfolio_Master_Release_v1.0.zip');
-      if (!fs.existsSync(demoFile)) {
-        // Generate a valid small dummy zip / binary package
-        const content = Buffer.from(
-          'PK\x05\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-          'Sample archive package ready for distribution via q.vopple.uk.\nProtected by VaultDrop password gate.'
-        );
-        fs.writeFileSync(demoFile, content);
-      }
+
+      // Create an encrypted demo file
+      const demoFile = path.join(demoDir, 'Portfolio_Master_Release_v1.0.zip.enc');
+      const rawContent = Buffer.from(
+        'PK\x05\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+        'Sample archive package ready for distribution via q.vopple.uk.\nProtected by VaultDrop AES-256 encrypted password gate.'
+      );
+
+      // Encrypt with demo password
+      const encKey = deriveKey('vopple2026', demoSalt);
+      const iv = crypto.randomBytes(16);
+      const cipher = crypto.createCipheriv('aes-256-cbc', encKey, iv);
+      const encrypted = Buffer.concat([iv, cipher.update(rawContent), cipher.final()]);
+      fs.writeFileSync(demoFile, encrypted);
 
       const initial: ShareRecord[] = [
         {
           id: demoId,
           filename: 'Portfolio_Master_Release_v1.0.zip',
-          fileSize: 1048576 * 14.5, // 14.5 MB demo representation
+          fileSize: 1048576 * 14.5,
           fileType: 'application/zip',
           title: 'Vopple Production Assets & Deployment Kit',
-          description: 'High-resolution renders, release bundles, and vector assets for the 2026 website redesign.',
+          description: 'Encrypted master archive containing release bundles and assets for q.vopple.uk.',
           createdAt: new Date().toISOString(),
           expiresAt: null,
           passwordSalt: demoSalt,
           passwordHash: demoHash,
-          checksumSha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          checksumSha256: crypto.createHash('sha256').update(rawContent).digest('hex'),
           downloadCount: 3,
           isFolder: true,
+          isEncrypted: true,
+          sourceType: 'local_encrypted',
         },
       ];
       fs.writeFileSync(SHARES_FILE, JSON.stringify(initial, null, 2));
@@ -105,8 +117,12 @@ function hashPassword(password: string, salt: string): string {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
+function deriveKey(password: string, salt: string): Buffer {
+  return crypto.scryptSync(password, salt, 32);
+}
+
 function generateAccessToken(shareId: string): string {
-  const expires = Date.now() + 2 * 60 * 60 * 1000; // 2 hours
+  const expires = Date.now() + 2 * 60 * 60 * 1000; // 2 hours validity
   const payload = `${shareId}:${expires}`;
   const sig = crypto.createHmac('sha256', HMAC_SECRET).update(payload).digest('hex');
   return Buffer.from(`${payload}:${sig}`).toString('base64url');
@@ -128,6 +144,20 @@ function verifyAccessToken(shareId: string, token: string): boolean {
   }
 }
 
+// Parse GitHub repository shorthand or full URL
+function parseGitHubRepo(input: string): { owner: string; repo: string } | null {
+  const cleaned = input.trim().replace(/\.git$/, '');
+  const urlMatch = cleaned.match(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/);
+  if (urlMatch) {
+    return { owner: urlMatch[1], repo: urlMatch[2] };
+  }
+  const shorthandMatch = cleaned.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)$/);
+  if (shorthandMatch) {
+    return { owner: shorthandMatch[1], repo: shorthandMatch[2] };
+  }
+  return null;
+}
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -135,12 +165,59 @@ app.use(express.urlencoded({ extended: true }));
 // Raw body parser for binary upload chunks (supports chunks up to 25MB each)
 app.use('/api/upload/chunk', express.raw({ type: 'application/octet-stream', limit: '25mb' }));
 
+// Allow iframe embedding across all platforms (AI Studio preview, *.vopple.uk, etc.)
+app.use((req, res, next) => {
+  res.removeHeader('X-Frame-Options');
+  res.setHeader('Content-Security-Policy', "frame-ancestors *;");
+  next();
+});
+
 // 1. Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// 2. Initialize chunked upload
+// Config endpoints for q.vopple.uk and cross-subdomain iframe embeds
+const CONFIG_JSON_PATH = path.join(__dirname, 'config.json');
+const CONFIG_YAML_PATH = path.join(__dirname, 'config.yaml');
+
+app.get('/api/config', (req, res) => {
+  try {
+    let jsonConfig = {};
+    let yamlConfig = '';
+    if (fs.existsSync(CONFIG_JSON_PATH)) {
+      jsonConfig = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8'));
+    }
+    if (fs.existsSync(CONFIG_YAML_PATH)) {
+      yamlConfig = fs.readFileSync(CONFIG_YAML_PATH, 'utf-8');
+    }
+    res.json({
+      config: jsonConfig,
+      yaml: yamlConfig,
+      subdomain: 'q.vopple.uk',
+      backendHost: req.protocol + '://' + req.get('host'),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read configuration.' });
+  }
+});
+
+app.put('/api/config', (req, res) => {
+  try {
+    const { config, yaml } = req.body;
+    if (config) {
+      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify(config, null, 2));
+    }
+    if (yaml) {
+      fs.writeFileSync(CONFIG_YAML_PATH, yaml);
+    }
+    res.json({ success: true, message: 'Configuration saved.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to write configuration.' });
+  }
+});
+
+// 2. Initialize chunked upload (supports files up to 1GB)
 app.post('/api/upload/init', (req, res) => {
   try {
     const { filename, fileSize, fileType, password, title, description, expiryDays, isFolder, totalChunks } = req.body;
@@ -149,16 +226,19 @@ app.post('/api/upload/init', (req, res) => {
       return res.status(400).json({ error: 'Filename and file size are required.' });
     }
 
-    if (!password || password.trim().length === 0) {
-      return res.status(400).json({ error: 'A password is required for protected sharing.' });
+    const numSize = Number(fileSize);
+    if (numSize > 1024 * 1024 * 1024 * 1.05) { // 1GB + 5% tolerance
+      return res.status(400).json({ error: 'File exceeds maximum supported upload limit of 1GB.' });
     }
 
-    // Generate unique ID (8 chars clean alphanumeric)
+    if (!password || password.trim().length === 0) {
+      return res.status(400).json({ error: 'A password is required for encrypted file sharing.' });
+    }
+
     const shareId = crypto.randomBytes(5).toString('hex');
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = hashPassword(password, salt);
 
-    // Create temp directory for chunks
     const tempShareDir = path.join(TEMP_DIR, shareId);
     if (!fs.existsSync(tempShareDir)) {
       fs.mkdirSync(tempShareDir, { recursive: true });
@@ -171,11 +251,10 @@ app.post('/api/upload/init', (req, res) => {
       expiresAt = exp.toISOString();
     }
 
-    // Store pending metadata in temp
     const pendingMeta = {
       id: shareId,
       filename,
-      fileSize: Number(fileSize),
+      fileSize: numSize,
       fileType: fileType || 'application/octet-stream',
       title: title?.trim() || filename,
       description: description?.trim() || '',
@@ -183,6 +262,7 @@ app.post('/api/upload/init', (req, res) => {
       expiresAt,
       passwordSalt: salt,
       passwordHash: hash,
+      rawPasswordForEncryption: password.trim(),
       isFolder: Boolean(isFolder),
       totalChunks: Number(totalChunks) || 1,
     };
@@ -193,7 +273,7 @@ app.post('/api/upload/init', (req, res) => {
       success: true,
       uploadId: shareId,
       shareId,
-      message: 'Upload initialized. Ready for chunks.',
+      message: 'Upload session initialized with AES-256 encryption at rest.',
     });
   } catch (err: any) {
     console.error('Error init upload:', err);
@@ -235,7 +315,7 @@ app.post('/api/upload/chunk', (req, res) => {
   }
 });
 
-// 4. Complete upload: assemble chunks into final file & generate sha256 checksum
+// 4. Complete upload: merge chunks, encrypt with AES-256-CBC at rest, compute SHA-256
 app.post('/api/upload/complete', async (req, res) => {
   try {
     const { uploadId, shareId } = req.body;
@@ -263,23 +343,38 @@ app.post('/api/upload/complete', async (req, res) => {
       }
     }
 
-    // Target upload destination
     const finalDir = path.join(UPLOADS_DIR, targetId);
     if (!fs.existsSync(finalDir)) {
       fs.mkdirSync(finalDir, { recursive: true });
     }
 
     const safeFilename = path.basename(meta.filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const finalFilePath = path.join(finalDir, safeFilename);
+    const encryptedFilePath = path.join(finalDir, `${safeFilename}.enc`);
 
-    const writeStream = fs.createWriteStream(finalFilePath);
+    // Setup AES-256 encryption stream
+    const encKey = deriveKey(meta.rawPasswordForEncryption, meta.passwordSalt);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-cbc', encKey, iv);
     const hash = crypto.createHash('sha256');
 
+    const writeStream = fs.createWriteStream(encryptedFilePath);
+    // Write the 16-byte IV as file header
+    writeStream.write(iv);
+
+    // Stream each chunk into hash and cipher
     for (let i = 0; i < totalChunks; i++) {
       const partPath = path.join(tempShareDir, `chunk_${i}.part`);
       const buffer = fs.readFileSync(partPath);
       hash.update(buffer);
-      writeStream.write(buffer);
+      const encryptedChunk = cipher.update(buffer);
+      if (encryptedChunk.length > 0) {
+        writeStream.write(encryptedChunk);
+      }
+    }
+
+    const finalBlock = cipher.final();
+    if (finalBlock.length > 0) {
+      writeStream.write(finalBlock);
     }
 
     await new Promise((resolve, reject) => {
@@ -296,12 +391,10 @@ app.post('/api/upload/complete', async (req, res) => {
       console.warn('Could not clean temp chunk dir:', e);
     }
 
-    // Save to shares registry
-    const stat = fs.statSync(finalFilePath);
     const newShare: ShareRecord = {
       id: targetId,
       filename: safeFilename,
-      fileSize: stat.size,
+      fileSize: meta.fileSize,
       fileType: meta.fileType,
       title: meta.title || safeFilename,
       description: meta.description || '',
@@ -312,6 +405,8 @@ app.post('/api/upload/complete', async (req, res) => {
       checksumSha256,
       downloadCount: 0,
       isFolder: meta.isFolder,
+      isEncrypted: true,
+      sourceType: 'local_encrypted',
     };
 
     const shares = loadShares();
@@ -333,15 +428,210 @@ app.post('/api/upload/complete', async (req, res) => {
         checksumSha256: newShare.checksumSha256,
         downloadCount: 0,
         isFolder: newShare.isFolder,
+        isEncrypted: true,
+        sourceType: newShare.sourceType,
       },
     });
   } catch (err: any) {
     console.error('Error completing upload:', err);
-    res.status(500).json({ error: 'Failed to assemble and finalize upload.' });
+    res.status(500).json({ error: 'Failed to assemble and finalize encrypted upload.' });
   }
 });
 
-// 5. Get public share info (recipient safe: no salt/hash returned)
+// 5. GitHub Repo Scanner: looks for TARGET.zip, TARGET.7z, TARGET.* or compressed archives in releases and repo contents
+app.post('/api/github/scan', async (req, res) => {
+  try {
+    const { repoUrl, targetFilename, token } = req.body;
+
+    if (!repoUrl) {
+      return res.status(400).json({ error: 'GitHub repository URL or owner/repo is required.' });
+    }
+
+    const parsed = parseGitHubRepo(repoUrl);
+    if (!parsed) {
+      return res.status(400).json({ error: 'Invalid GitHub repository format. Use "owner/repo" or "https://github.com/owner/repo".' });
+    }
+
+    const { owner, repo } = parsed;
+    const headers: Record<string, string> = {
+      'User-Agent': 'VaultDrop-FileGrabber/1.0',
+      'Accept': 'application/vnd.github.v3+json',
+    };
+    if (token && token.trim()) {
+      headers['Authorization'] = `token ${token.trim()}`;
+    }
+
+    const targetPattern = targetFilename?.trim() || 'TARGET';
+    const matches: Array<{
+      name: string;
+      size: number;
+      downloadUrl: string;
+      source: 'release' | 'contents';
+      releaseTag?: string;
+      releaseName?: string;
+    }> = [];
+
+    // Check GitHub Releases first (supports free hosting up to 2GB per asset!)
+    try {
+      const releasesRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, { headers });
+      if (releasesRes.ok) {
+        const releases = await releasesRes.json();
+        if (Array.isArray(releases)) {
+          for (const rel of releases) {
+            if (Array.isArray(rel.assets)) {
+              for (const asset of rel.assets) {
+                const name = asset.name;
+                const isExact = name.toLowerCase() === targetPattern.toLowerCase();
+                const isTargetPrefix = name.toLowerCase().startsWith(targetPattern.toLowerCase());
+                const isArchive = /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz)$/i.test(name);
+
+                if (isExact || isTargetPrefix || (targetPattern === 'TARGET' && isArchive)) {
+                  matches.push({
+                    name: asset.name,
+                    size: asset.size,
+                    downloadUrl: asset.browser_download_url,
+                    source: 'release',
+                    releaseTag: rel.tag_name,
+                    releaseName: rel.name || rel.tag_name,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('GitHub releases scan error:', e);
+    }
+
+    // Check root repository contents for files (e.g. TARGET.zip in repository tree)
+    try {
+      const contentsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents`, { headers });
+      if (contentsRes.ok) {
+        const contents = await contentsRes.json();
+        if (Array.isArray(contents)) {
+          for (const item of contents) {
+            if (item.type === 'file') {
+              const name = item.name;
+              const isExact = name.toLowerCase() === targetPattern.toLowerCase();
+              const isTargetPrefix = name.toLowerCase().startsWith(targetPattern.toLowerCase());
+              const isArchive = /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz)$/i.test(name);
+
+              if (isExact || isTargetPrefix || (targetPattern === 'TARGET' && isArchive)) {
+                // Ensure not already in matches from release
+                if (!matches.some((m) => m.name === item.name)) {
+                  matches.push({
+                    name: item.name,
+                    size: item.size,
+                    downloadUrl: item.download_url,
+                    source: 'contents',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('GitHub contents scan error:', e);
+    }
+
+    res.json({
+      success: true,
+      owner,
+      repo,
+      targetSearched: targetPattern,
+      count: matches.length,
+      matches,
+    });
+  } catch (err: any) {
+    console.error('Error scanning GitHub:', err);
+    res.status(500).json({ error: 'Failed to scan GitHub repository: ' + (err.message || 'Network error') });
+  }
+});
+
+// 6. Import file from GitHub (Zero Hosting Cost Mode: uses GitHub CDN stream proxy)
+app.post('/api/github/import', (req, res) => {
+  try {
+    const {
+      repoUrl,
+      downloadUrl,
+      filename,
+      fileSize,
+      password,
+      title,
+      description,
+      expiryDays,
+      releaseTag,
+    } = req.body;
+
+    if (!downloadUrl || !filename) {
+      return res.status(400).json({ error: 'Download URL and filename are required.' });
+    }
+
+    if (!password || password.trim().length === 0) {
+      return res.status(400).json({ error: 'A password is required for protected sharing.' });
+    }
+
+    const shareId = crypto.randomBytes(5).toString('hex');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = hashPassword(password.trim(), salt);
+
+    let expiresAt: string | null = null;
+    if (expiryDays && Number(expiryDays) > 0) {
+      const exp = new Date();
+      exp.setDate(exp.getDate() + Number(expiryDays));
+      expiresAt = exp.toISOString();
+    }
+
+    const newShare: ShareRecord = {
+      id: shareId,
+      filename,
+      fileSize: Number(fileSize) || 0,
+      fileType: filename.endsWith('.7z') ? 'application/x-7z-compressed' : 'application/zip',
+      title: title?.trim() || filename,
+      description: description?.trim() || `Hosted on GitHub (${repoUrl || 'repository'}). Password protected with VaultDrop.`,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      passwordSalt: salt,
+      passwordHash: hash,
+      downloadCount: 0,
+      isFolder: true,
+      isEncrypted: false,
+      sourceType: 'github',
+      githubDownloadUrl: downloadUrl,
+      githubRepo: repoUrl,
+      githubReleaseTag: releaseTag,
+    };
+
+    const shares = loadShares();
+    shares.unshift(newShare);
+    saveShares(shares);
+
+    res.json({
+      success: true,
+      share: {
+        id: newShare.id,
+        filename: newShare.filename,
+        fileSize: newShare.fileSize,
+        fileType: newShare.fileType,
+        title: newShare.title,
+        description: newShare.description,
+        createdAt: newShare.createdAt,
+        expiresAt: newShare.expiresAt,
+        hasPassword: true,
+        downloadCount: 0,
+        isFolder: newShare.isFolder,
+        sourceType: 'github',
+      },
+    });
+  } catch (err: any) {
+    console.error('Error importing GitHub file:', err);
+    res.status(500).json({ error: 'Failed to import file from GitHub.' });
+  }
+});
+
+// 7. Get public share info (recipient safe)
 app.get('/api/shares/:id/info', (req, res) => {
   try {
     const { id } = req.params;
@@ -352,7 +642,6 @@ app.get('/api/shares/:id/info', (req, res) => {
       return res.status(404).json({ error: 'The requested file was not found or has been removed.' });
     }
 
-    // Check expiry
     const isExpired = share.expiresAt ? new Date(share.expiresAt).getTime() < Date.now() : false;
 
     res.json({
@@ -369,13 +658,16 @@ app.get('/api/shares/:id/info', (req, res) => {
       downloadCount: share.downloadCount,
       checksumSha256: share.checksumSha256,
       isFolder: share.isFolder,
+      isEncrypted: share.isEncrypted ?? false,
+      sourceType: share.sourceType || 'local_encrypted',
+      githubReleaseTag: share.githubReleaseTag,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve file info.' });
   }
 });
 
-// 6. Verify password & issue access token (with anti-bruteforce protection)
+// 8. Verify password & issue access token
 app.post('/api/shares/:id/verify', (req, res) => {
   try {
     const { id } = req.params;
@@ -383,7 +675,6 @@ app.post('/api/shares/:id/verify', (req, res) => {
     const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
     const rateKey = `${id}:${clientIp}`;
 
-    // Rate limit check
     const rl = rateLimits.get(rateKey);
     const now = Date.now();
     if (rl && rl.lockedUntil > now) {
@@ -417,7 +708,6 @@ app.post('/api/shares/:id/verify', (req, res) => {
       const currentCount = (rl ? rl.count : 0) + 1;
       const maxAttempts = 5;
       if (currentCount >= maxAttempts) {
-        // Lock for 60 seconds
         rateLimits.set(rateKey, { count: 0, lockedUntil: now + 60 * 1000 });
         return res.status(429).json({
           error: 'Incorrect password. 5 attempts exceeded. Locked for 60 seconds.',
@@ -434,7 +724,6 @@ app.post('/api/shares/:id/verify', (req, res) => {
       }
     }
 
-    // Success: clear rate limit and issue token
     rateLimits.delete(rateKey);
     const accessToken = generateAccessToken(share.id);
 
@@ -444,7 +733,7 @@ app.post('/api/shares/:id/verify', (req, res) => {
       filename: share.filename,
       fileSize: share.fileSize,
       title: share.title,
-      downloadUrl: `/api/shares/${share.id}/download?token=${encodeURIComponent(accessToken)}`,
+      downloadUrl: `/api/shares/${share.id}/download?token=${encodeURIComponent(accessToken)}&pwd=${encodeURIComponent(password)}`,
     });
   } catch (err: any) {
     console.error('Error verifying password:', err);
@@ -452,8 +741,8 @@ app.post('/api/shares/:id/verify', (req, res) => {
   }
 });
 
-// 7. Secure download stream
-app.get('/api/shares/:id/download', (req, res) => {
+// 9. Secure download stream (Supports AES-256 decrypted streaming or GitHub proxy streaming)
+app.get('/api/shares/:id/download', async (req, res) => {
   try {
     const { id } = req.params;
     const token = (req.query.token as string) || '';
@@ -470,7 +759,6 @@ app.get('/api/shares/:id/download', (req, res) => {
       return res.status(410).send('This download link has expired.');
     }
 
-    // Verify token or direct password
     let authorized = false;
     if (token && verifyAccessToken(share.id, token)) {
       authorized = true;
@@ -483,27 +771,70 @@ app.get('/api/shares/:id/download', (req, res) => {
       return res.status(403).send('Unauthorized. Valid token or password is required to download this file.');
     }
 
-    const filePath = path.join(UPLOADS_DIR, share.id, share.filename);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).send('The physical file could not be found on the server.');
-    }
-
-    // Increment download count
+    // Increment download counter
     share.downloadCount = (share.downloadCount || 0) + 1;
     saveShares(shares);
 
-    // Stream download with standard headers and Range support via res.download/res.sendFile
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.filename)}"`);
-    res.setHeader('Content-Type', share.fileType || 'application/octet-stream');
+    // Case 1: GitHub Hosted File (Zero Hosting Cost) -> Stream from GitHub CDN
+    if (share.sourceType === 'github' && share.githubDownloadUrl) {
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.filename)}"`);
+      res.setHeader('Content-Type', share.fileType || 'application/octet-stream');
+      if (share.fileSize > 0) {
+        res.setHeader('Content-Length', share.fileSize);
+      }
 
-    return res.sendFile(filePath);
+      // Stream fetch from GitHub CDN
+      const ghStreamRes = await fetch(share.githubDownloadUrl);
+      if (!ghStreamRes.ok || !ghStreamRes.body) {
+        // Fallback: direct browser redirect to CDN
+        return res.redirect(share.githubDownloadUrl);
+      }
+
+      // @ts-ignore: web stream to node stream piping
+      const { Readable } = await import('stream');
+      // @ts-ignore
+      const nodeStream = Readable.fromWeb(ghStreamRes.body);
+      return nodeStream.pipe(res);
+    }
+
+    // Case 2: Local AES-256 Encrypted File -> Decrypt on-the-fly and pipe to response
+    const encFilePath = path.join(UPLOADS_DIR, share.id, `${share.filename}.enc`);
+    const plainFilePath = path.join(UPLOADS_DIR, share.id, share.filename);
+
+    if (fs.existsSync(encFilePath) && pwd) {
+      const encKey = deriveKey(pwd, share.passwordSalt);
+      const fd = fs.openSync(encFilePath, 'r');
+      const ivBuffer = Buffer.alloc(16);
+      fs.readSync(fd, ivBuffer, 0, 16, 0);
+      fs.closeSync(fd);
+
+      const decipher = crypto.createDecipheriv('aes-256-cbc', encKey, ivBuffer);
+      const readStream = fs.createReadStream(encFilePath, { start: 16 });
+
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.filename)}"`);
+      res.setHeader('Content-Type', share.fileType || 'application/octet-stream');
+      if (share.fileSize > 0) {
+        res.setHeader('Content-Length', share.fileSize);
+      }
+
+      return readStream.pipe(decipher).pipe(res);
+    } else if (fs.existsSync(plainFilePath)) {
+      // Unencrypted file fallback
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.filename)}"`);
+      res.setHeader('Content-Type', share.fileType || 'application/octet-stream');
+      return res.sendFile(plainFilePath);
+    } else {
+      return res.status(404).send('Encrypted data payload could not be located on disk.');
+    }
   } catch (err) {
-    console.error('Error downloading:', err);
-    res.status(500).send('Error downloading file.');
+    console.error('Error during download stream:', err);
+    if (!res.headersSent) {
+      res.status(500).send('Error streaming download.');
+    }
   }
 });
 
-// 8. Admin: List all shares
+// 10. Admin: List all shares
 app.get('/api/admin/shares', (req, res) => {
   try {
     const shares = loadShares();
@@ -520,6 +851,10 @@ app.get('/api/admin/shares', (req, res) => {
       checksumSha256: s.checksumSha256,
       isFolder: s.isFolder,
       hasPassword: true,
+      isEncrypted: s.isEncrypted ?? false,
+      sourceType: s.sourceType || 'local_encrypted',
+      githubRepo: s.githubRepo,
+      githubReleaseTag: s.githubReleaseTag,
     }));
     res.json({ shares: mapped });
   } catch (err) {
@@ -527,7 +862,7 @@ app.get('/api/admin/shares', (req, res) => {
   }
 });
 
-// 9. Admin: Delete share
+// 11. Admin: Delete share
 app.delete('/api/admin/shares/:id', (req, res) => {
   try {
     const { id } = req.params;
@@ -538,7 +873,6 @@ app.delete('/api/admin/shares/:id', (req, res) => {
       return res.status(404).json({ error: 'Share not found.' });
     }
 
-    // Remove from disk
     const targetDir = path.join(UPLOADS_DIR, id);
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
@@ -559,9 +893,24 @@ async function startServer() {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'spa',
+      appType: 'custom',
     });
     app.use(vite.middlewares);
+
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      if (url.startsWith('/api/')) {
+        return next();
+      }
+      try {
+        let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        if (vite) vite.ssrFixStacktrace(e);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));

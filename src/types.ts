@@ -8,10 +8,23 @@ export interface ShareItem {
   createdAt: string;
   expiresAt: string | null;
   downloadCount: number;
-  checksumSha256: string;
+  checksumSha256?: string;
   isFolder: boolean;
   hasPassword?: boolean;
   isExpired?: boolean;
+  isEncrypted?: boolean;
+  sourceType?: 'local_encrypted' | 'github';
+  githubRepo?: string;
+  githubReleaseTag?: string;
+}
+
+export interface GitHubMatchedAsset {
+  name: string;
+  size: number;
+  downloadUrl: string;
+  source: 'release' | 'contents';
+  releaseTag?: string;
+  releaseName?: string;
 }
 
 export interface UploadState {

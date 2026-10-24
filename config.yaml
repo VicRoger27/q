@@ -1,0 +1,36 @@
+# VaultDrop Configuration for q.vopple.uk
+# Cross-subdomain iframe embedding for the vopple.uk ecosystem
+
+app:
+  name: "VaultDrop"
+  subdomain: "q.vopple.uk"
+  domain: "vopple.uk"
+  service: "file-sharing-and-embeds"
+
+# Iframe embed defaults when embedding into other subdomains (*.vopple.uk)
+iframeEmbed:
+  defaultWidth: "100%"
+  defaultHeight: 460
+  maxWidth: "640px"
+  allow: "clipboard-write"
+  borderRadius: "12px"
+  border: "1px solid #e2e8f0"
+  boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)"
+  allowedSubdomainParents:
+    - "https://*.vopple.uk"
+    - "https://vopple.uk"
+
+# Target file grabber from GitHub (Free 2GB hosting)
+githubSync:
+  defaultRepo: "VicRoger27/q"
+  targetFilename: "TARGET.zip"
+  fallbackFilenames:
+    - "TARGET.7z"
+    - "TARGET.tar.gz"
+    - "TARGET.rar"
+
+# Subdomain Directory across your ecosystem
+subdomains:
+  q: "https://q.vopple.uk"       # This app: password protected files & iframe embed host
+  vpl: "https://vpl.vopple.uk"   # Vopple Public License generator
+  root: "https://vopple.uk"      # Main portfolio and hub

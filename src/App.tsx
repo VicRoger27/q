@@ -4,6 +4,7 @@ import { UploadView } from './components/UploadView';
 import { SharesList } from './components/SharesList';
 import { EmbedSandbox } from './components/EmbedSandbox';
 import { DocsView } from './components/DocsView';
+import { ConfigView } from './components/ConfigView';
 import { RecipientGate } from './components/RecipientGate';
 import { ShareSuccessModal } from './components/ShareSuccessModal';
 import { ShareItem } from './types';
@@ -12,7 +13,7 @@ import { ArrowLeft, Shield } from 'lucide-react';
 const PERSONAL_DOMAIN = 'q.vopple.uk';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'upload' | 'shares' | 'embed' | 'docs'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'shares' | 'embed' | 'docs' | 'config'>('upload');
   const [shares, setShares] = useState<ShareItem[]>([]);
   const [modalShare, setModalShare] = useState<ShareItem | null>(null);
   const [modalPassword, setModalPassword] = useState<string | undefined>(undefined);
@@ -156,6 +157,10 @@ export default function App() {
 
         {activeTab === 'docs' && (
           <DocsView domain={PERSONAL_DOMAIN} />
+        )}
+
+        {activeTab === 'config' && (
+          <ConfigView domain={PERSONAL_DOMAIN} />
         )}
       </main>
 

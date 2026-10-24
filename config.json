@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "app": {
+    "name": "VaultDrop",
+    "subdomain": "q.vopple.uk",
+    "domain": "vopple.uk",
+    "service": "file-sharing-and-embeds"
+  },
+  "iframeEmbed": {
+    "defaultWidth": "100%",
+    "defaultHeight": 460,
+    "maxWidth": "640px",
+    "allow": "clipboard-write",
+    "borderRadius": "12px",
+    "border": "1px solid #e2e8f0",
+    "boxShadow": "0 4px 6px -1px rgba(0,0,0,0.05)",
+    "allowedSubdomainParents": [
+      "https://*.vopple.uk",
+      "https://vopple.uk"
+    ]
+  },
+  "githubSync": {
+    "defaultRepo": "VicRoger27/q",
+    "targetFilename": "TARGET.zip",
+    "fallbackFilenames": [
+      "TARGET.7z",
+      "TARGET.tar.gz",
+      "TARGET.rar"
+    ]
+  },
+  "subdomains": {
+    "q": "https://q.vopple.uk",
+    "vpl": "https://vpl.vopple.uk",
+    "root": "https://vopple.uk"
+  }
+}
