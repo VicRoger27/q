@@ -103,6 +103,32 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
           throw new Error('This share link could not be found or has expired.');
         }
 
+        // Auto-probe real size if share was saved when GitHub release was 0 bytes or updated from 0 to 500MB
+        if (data && data.sourceType === 'github' && (!data.fileSize || data.fileSize === 0)) {
+          try {
+            const probeRes = await fetch('/api/github/probe-asset', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                repoUrl: data.githubRepo,
+                tag: data.githubReleaseTag,
+                filename: data.filename,
+                downloadUrl: data.githubDownloadUrl,
+                apiUrl: data.githubAssetApiUrl,
+                token: data.githubToken || getSavedGitHubToken(),
+              }),
+            });
+            if (probeRes.ok) {
+              const probeJson = await probeRes.json();
+              if (probeJson.size && probeJson.size > 0) {
+                data = { ...data, fileSize: probeJson.size };
+              }
+            }
+          } catch {
+            // Ignore probe failure
+          }
+        }
+
         if (isMounted) {
           setShareInfo(data);
         }

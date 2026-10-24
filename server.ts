@@ -589,8 +589,192 @@ app.post('/api/upload/complete', async (req, res) => {
 
 
 
+// Helper: Probe GitHub release asset size and metadata without browser CORS limits
+async function probeGitHubAssetDetails(options: {
+  repoUrl?: string;
+  githubRepo?: string;
+  owner?: string;
+  repo?: string;
+  tag?: string;
+  filename?: string;
+  downloadUrl?: string;
+  assetApiUrl?: string;
+  assetId?: number;
+  token?: string;
+}): Promise<{ size: number; id?: number; apiUrl?: string; name?: string }> {
+  let resolvedSize = 0;
+  let resolvedId: number | undefined = options.assetId;
+  let resolvedApiUrl = options.assetApiUrl;
+  let resolvedName = options.filename;
+
+  let owner = options.owner;
+  let repo = options.repo;
+
+  if (!owner || !repo) {
+    const rawRepo = options.repoUrl || options.githubRepo || '';
+    const clean = rawRepo.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').split('/releases/')[0];
+    const parts = clean.split('/');
+    if (parts.length >= 2) {
+      owner = parts[0];
+      repo = parts[1];
+    }
+  }
+
+  const headers: Record<string, string> = {
+    'User-Agent': 'VaultDrop-Streamer/2.0',
+    Accept: 'application/vnd.github.v3+json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Pragma: 'no-cache',
+  };
+  if (options.token && options.token.trim()) {
+    headers['Authorization'] = `token ${options.token.trim()}`;
+  }
+
+  // 1. If assetApiUrl or assetId is provided, query asset API
+  const apiUrlToTry = resolvedApiUrl || (owner && repo && resolvedId ? `https://api.github.com/repos/${owner}/${repo}/releases/assets/${resolvedId}` : null);
+  if (apiUrlToTry) {
+    try {
+      const assetRes = await fetch(`${apiUrlToTry}?_t=${Date.now()}`, { headers, cache: 'no-store' });
+      if (assetRes.ok) {
+        const assetJson: any = await assetRes.json();
+        if (assetJson.size && Number(assetJson.size) > 0) {
+          return {
+            size: Number(assetJson.size),
+            id: assetJson.id,
+            apiUrl: assetJson.url,
+            name: assetJson.name || resolvedName,
+          };
+        }
+      }
+    } catch (e) {
+      // Continue to next probe method
+    }
+  }
+
+  // 2. Query release tag endpoint
+  if (owner && repo && options.tag) {
+    try {
+      const tagUrl = `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(options.tag)}?_t=${Date.now()}`;
+      const tagRes = await fetch(tagUrl, { headers, cache: 'no-store' });
+      if (tagRes.ok) {
+        const tagJson: any = await tagRes.json();
+        if (Array.isArray(tagJson.assets)) {
+          const match = tagJson.assets.find(
+            (a: any) =>
+              !options.filename ||
+              a.name.toLowerCase() === options.filename.toLowerCase() ||
+              decodeURIComponent(a.name).toLowerCase() === options.filename.toLowerCase()
+          );
+          if (match && Number(match.size) > 0) {
+            return {
+              size: Number(match.size),
+              id: match.id,
+              apiUrl: match.url,
+              name: match.name,
+            };
+          }
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // 3. Query all releases (handles draft releases or tag name variations)
+  if (owner && repo) {
+    try {
+      const relsUrl = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=50&_t=${Date.now()}`;
+      const relsRes = await fetch(relsUrl, { headers, cache: 'no-store' });
+      if (relsRes.ok) {
+        const rels: any = await relsRes.json();
+        if (Array.isArray(rels)) {
+          for (const rel of rels) {
+            if (Array.isArray(rel.assets)) {
+              const match = rel.assets.find(
+                (a: any) =>
+                  !options.filename ||
+                  a.name.toLowerCase() === options.filename.toLowerCase() ||
+                  decodeURIComponent(a.name).toLowerCase() === options.filename.toLowerCase()
+              );
+              if (match && Number(match.size) > 0) {
+                return {
+                  size: Number(match.size),
+                  id: match.id,
+                  apiUrl: match.url,
+                  name: match.name,
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // 4. Fallback: Probe Content-Length via HEAD request (following redirects)
+  if (options.downloadUrl) {
+    try {
+      const headHeaders: Record<string, string> = {
+        'User-Agent': 'VaultDrop-Streamer/2.0',
+        'Cache-Control': 'no-cache',
+      };
+      if (options.token && options.token.trim()) {
+        headHeaders['Authorization'] = `token ${options.token.trim()}`;
+      }
+      const headRes = await fetch(options.downloadUrl, {
+        method: 'HEAD',
+        headers: headHeaders,
+        redirect: 'follow',
+      });
+      const cl = headRes.headers.get('content-length');
+      if (cl && parseInt(cl, 10) > 0) {
+        return {
+          size: parseInt(cl, 10),
+          id: resolvedId,
+          apiUrl: resolvedApiUrl,
+          name: resolvedName,
+        };
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  return { size: resolvedSize, id: resolvedId, apiUrl: resolvedApiUrl, name: resolvedName };
+}
+
+// Probe endpoint called by frontend to verify GitHub asset size
+app.post('/api/github/probe-asset', async (req, res) => {
+  try {
+    const { repoUrl, githubRepo, owner, repo, tag, filename, downloadUrl, apiUrl, assetId, token } = req.body;
+    const details = await probeGitHubAssetDetails({
+      repoUrl,
+      githubRepo,
+      owner,
+      repo,
+      tag,
+      filename,
+      downloadUrl,
+      assetApiUrl: apiUrl,
+      assetId,
+      token,
+    });
+    res.json({
+      success: true,
+      size: details.size,
+      id: details.id,
+      apiUrl: details.apiUrl,
+      name: details.name,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Probe failed' });
+  }
+});
+
 // 6. Import file from GitHub (Zero Hosting Cost Mode: uses GitHub CDN stream proxy)
-app.post('/api/github/import', (req, res) => {
+app.post('/api/github/import', async (req, res) => {
   try {
     const {
       repoUrl,
@@ -616,6 +800,32 @@ app.post('/api/github/import', (req, res) => {
       return res.status(400).json({ error: 'A password is required for protected sharing.' });
     }
 
+    let resolvedFileSize = Number(fileSize) || 0;
+    let finalAssetId = assetId;
+    let finalAssetApiUrl = assetApiUrl;
+
+    // Auto-probe real file size if reported as 0 bytes
+    if (resolvedFileSize <= 0) {
+      try {
+        const probed = await probeGitHubAssetDetails({
+          repoUrl,
+          tag: releaseTag,
+          filename,
+          downloadUrl,
+          assetApiUrl,
+          assetId,
+          token,
+        });
+        if (probed.size > 0) {
+          resolvedFileSize = probed.size;
+          if (probed.id) finalAssetId = probed.id;
+          if (probed.apiUrl) finalAssetApiUrl = probed.apiUrl;
+        }
+      } catch (e) {
+        console.warn('Auto probe during import skipped:', e);
+      }
+    }
+
     const shareId = crypto.randomBytes(5).toString('hex');
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = hashPassword(password.trim(), salt);
@@ -630,7 +840,7 @@ app.post('/api/github/import', (req, res) => {
     const newShare: ShareRecord = {
       id: shareId,
       filename,
-      fileSize: Number(fileSize) || 0,
+      fileSize: resolvedFileSize,
       fileType: filename.endsWith('.7z') ? 'application/x-7z-compressed' : 'application/zip',
       title: title?.trim() || filename,
       description: description?.trim() || `Hosted on GitHub (${repoUrl || 'repository'}). Password protected with VaultDrop.`,
@@ -679,7 +889,7 @@ app.post('/api/github/import', (req, res) => {
 });
 
 // 7. Get public share info (recipient safe)
-app.get('/api/shares/:id/info', (req, res) => {
+app.get('/api/shares/:id/info', async (req, res) => {
   try {
     const { id } = req.params;
     const shares = loadShares();
@@ -687,6 +897,29 @@ app.get('/api/shares/:id/info', (req, res) => {
 
     if (!share) {
       return res.status(404).json({ error: 'The requested file was not found or has been removed.' });
+    }
+
+    // Lazy size repair for GitHub assets that were saved as 0 bytes or updated from 0 to 500MB
+    if (share.sourceType === 'github' && (!share.fileSize || share.fileSize === 0)) {
+      try {
+        const probed = await probeGitHubAssetDetails({
+          repoUrl: share.githubRepo,
+          tag: share.githubReleaseTag,
+          filename: share.filename,
+          downloadUrl: share.githubDownloadUrl,
+          assetApiUrl: share.githubAssetApiUrl,
+          assetId: share.githubAssetId,
+          token: share.githubToken,
+        });
+        if (probed.size > 0) {
+          share.fileSize = probed.size;
+          if (probed.id && !share.githubAssetId) share.githubAssetId = probed.id;
+          if (probed.apiUrl && !share.githubAssetApiUrl) share.githubAssetApiUrl = probed.apiUrl;
+          saveShares(shares);
+        }
+      } catch (e) {
+        console.warn('Lazy size repair probe failed:', e);
+      }
     }
 
     const isExpired = share.expiresAt ? new Date(share.expiresAt).getTime() < Date.now() : false;

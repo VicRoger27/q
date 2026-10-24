@@ -23,6 +23,8 @@ import {
   Trash2,
   HardDrive,
   Download,
+  RefreshCw,
+  Edit3,
 } from 'lucide-react';
 import { UploadState, ShareItem, GitHubMatchedAsset } from '../types';
 import {
@@ -33,7 +35,7 @@ import {
   generateRandomPassword,
 } from '../utils/formatters';
 import { uploadLargeFile, zipFolderFiles } from '../utils/uploader';
-import { scanGitHubReleasesClient } from '../utils/github';
+import { scanGitHubReleasesClient, refreshGitHubAssetSize, parseGitHubRepoUrl } from '../utils/github';
 import { saveLocalShare } from '../utils/localShares';
 import {
   getSavedGitHubToken,
@@ -75,6 +77,9 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
   const [githubScanError, setGithubScanError] = useState<string | null>(null);
   const [githubImporting, setGithubImporting] = useState(false);
   const [showPrivateGuide, setShowPrivateGuide] = useState(false);
+  const [isRefreshingSize, setIsRefreshingSize] = useState(false);
+  const [isEditingSize, setIsEditingSize] = useState(false);
+  const [customSizeMb, setCustomSizeMb] = useState('500');
 
   // Upload progress state
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
@@ -221,8 +226,9 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
       return;
     }
 
-    if (githubToken.trim() && rememberTokenInCookie) {
-      saveGitHubTokenToCookie(githubToken.trim(), true);
+    const tokenToUse = githubToken.trim() || getSavedGitHubToken();
+    if (tokenToUse && rememberTokenInCookie) {
+      saveGitHubTokenToCookie(tokenToUse, true);
       setIsTokenSavedInCookie(true);
     }
 
@@ -235,7 +241,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
       const data = await scanGitHubReleasesClient(
         githubRepoUrl.trim(),
         targetPattern.trim(),
-        githubToken.trim() || undefined
+        tokenToUse || undefined
       );
 
       if (!data.matches || data.matches.length === 0) {
@@ -254,6 +260,51 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     } finally {
       setIsScanningGithub(false);
     }
+  };
+
+  // Force re-query size from GitHub API and backend probe (bypassing all caches)
+  const handleRefreshAssetSize = async (assetToRefresh?: GitHubMatchedAsset) => {
+    const target = assetToRefresh || selectedGithubAsset;
+    if (!target) return;
+    setIsRefreshingSize(true);
+    try {
+      const parsed = parseGitHubRepoUrl(githubRepoUrl.trim());
+      const owner = parsed?.owner || '';
+      const repo = parsed?.repo || '';
+      const token = githubToken.trim() || getSavedGitHubToken();
+      const newSize = await refreshGitHubAssetSize(target, owner, repo, token);
+      if (newSize > 0) {
+        const updatedAsset = { ...target, size: newSize };
+        setSelectedGithubAsset(updatedAsset);
+        setGithubMatches((prev) =>
+          prev.map((a) => (a.downloadUrl === target.downloadUrl ? updatedAsset : a))
+        );
+        setCookieNotification(`File size verified: ${formatBytes(newSize)}`);
+        setTimeout(() => setCookieNotification(null), 3500);
+      } else {
+        setCookieNotification('GitHub still returned 0 bytes. Check token scope or set size manually.');
+        setTimeout(() => setCookieNotification(null), 4000);
+      }
+    } catch (err: any) {
+      setCookieNotification(err.message || 'Could not refresh size');
+      setTimeout(() => setCookieNotification(null), 4000);
+    } finally {
+      setIsRefreshingSize(false);
+    }
+  };
+
+  // Allow setting or overriding asset size if GitHub API index is delayed
+  const handleApplyCustomSize = (mb: number) => {
+    if (!selectedGithubAsset || mb <= 0) return;
+    const bytes = Math.round(mb * 1024 * 1024);
+    const updated = { ...selectedGithubAsset, size: bytes };
+    setSelectedGithubAsset(updated);
+    setGithubMatches((prev) =>
+      prev.map((a) => (a.downloadUrl === selectedGithubAsset.downloadUrl ? updated : a))
+    );
+    setIsEditingSize(false);
+    setCookieNotification(`File size set to ${formatBytes(bytes)}`);
+    setTimeout(() => setCookieNotification(null), 3000);
   };
 
   // Submit GitHub import
@@ -1161,6 +1212,17 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                             <span className="hidden sm:inline-block font-mono text-xs font-bold text-neutral-900 bg-white border border-neutral-200 px-2 py-1 rounded shadow-2xs">
                               {formatBytes(asset.size)}
                             </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRefreshAssetSize(asset);
+                              }}
+                              title="Refresh size from GitHub (bypass cache)"
+                              className="p-1 text-neutral-400 hover:text-neutral-900 hover:bg-neutral-200/60 rounded cursor-pointer transition-colors"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingSize && selectedGithubAsset?.downloadUrl === asset.downloadUrl ? 'animate-spin text-emerald-600' : ''}`} />
+                            </button>
                             {selectedGithubAsset?.downloadUrl === asset.downloadUrl ? (
                               <div className="w-6 h-6 rounded-full bg-neutral-900 text-white flex items-center justify-center">
                                 <Check className="w-3.5 h-3.5 stroke-[3]" />
@@ -1177,6 +1239,108 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                   {/* Password & Security Configuration for GitHub File */}
                   {selectedGithubAsset && (
                     <form onSubmit={handleImportGithub} className="pt-4 border-t border-neutral-200 space-y-5">
+                      {/* 0-byte Warning Box if GitHub returns cached/empty size */}
+                      {selectedGithubAsset.size === 0 && (
+                        <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-2.5">
+                          <div className="flex items-start gap-2.5">
+                            <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <div className="font-bold text-amber-900">
+                                GitHub API Cached / Reported 0 MB for this Release Asset
+                              </div>
+                              <p className="text-[11px] text-amber-800 leading-relaxed mt-0.5">
+                                If you uploaded your 500MB file after creating the release, or switched the repository to private, browsers and GitHub's REST cache often return 0 bytes until refreshed.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-amber-200/80">
+                            <button
+                              type="button"
+                              onClick={() => handleRefreshAssetSize(selectedGithubAsset)}
+                              disabled={isRefreshingSize}
+                              className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors shadow-2xs"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingSize ? 'animate-spin' : ''}`} />
+                              <span>{isRefreshingSize ? 'Querying GitHub...' : 'Refresh Size from GitHub'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyCustomSize(500)}
+                              className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg font-bold text-xs cursor-pointer transition-colors shadow-2xs"
+                            >
+                              ⚡ Set to 500 MB (proj1)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingSize(!isEditingSize)}
+                              className="px-2.5 py-1.5 text-amber-900 hover:text-amber-950 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>Custom size</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Manual Size Editor Modal/Drawer */}
+                      {isEditingSize && (
+                        <div className="p-3 bg-neutral-100 border border-neutral-300 rounded-xl space-y-2 text-xs">
+                          <div className="font-bold text-neutral-900 flex items-center justify-between">
+                            <span>Specify File Size Manually</span>
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingSize(false)}
+                              className="text-neutral-500 hover:text-neutral-900 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="1"
+                              max="2048"
+                              value={customSizeMb}
+                              onChange={(e) => setCustomSizeMb(e.target.value)}
+                              placeholder="500"
+                              className="w-28 px-2.5 py-1.5 bg-white border border-neutral-300 rounded text-xs font-mono"
+                            />
+                            <span className="font-semibold text-neutral-600">MB</span>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyCustomSize(Number(customSizeMb))}
+                              className="px-3 py-1.5 bg-neutral-900 text-white rounded text-xs font-bold hover:bg-neutral-800 cursor-pointer"
+                            >
+                              Apply
+                            </button>
+                            <div className="flex items-center gap-1 ml-auto">
+                              <button
+                                type="button"
+                                onClick={() => handleApplyCustomSize(100)}
+                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer"
+                              >
+                                100MB
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleApplyCustomSize(500)}
+                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer font-bold text-emerald-700"
+                              >
+                                500MB
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleApplyCustomSize(1024)}
+                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer"
+                              >
+                                1GB
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Prominent Selected Asset & File Size Banner */}
                       <div className="p-4 bg-emerald-50/80 border border-emerald-300 rounded-xl flex items-center justify-between flex-wrap gap-4">
                         <div className="flex items-center gap-3 min-w-0">
@@ -1193,15 +1357,37 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0">
-                          <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
-                            Verified File Size
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="text-right">
+                            <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider flex items-center justify-end gap-1">
+                              <span>Verified File Size</span>
+                            </div>
+                            <div className={`text-lg font-extrabold font-mono ${selectedGithubAsset.size === 0 ? 'text-amber-800' : 'text-neutral-900'}`}>
+                              {formatBytes(selectedGithubAsset.size)}
+                            </div>
+                            <div className="text-[11px] text-neutral-500 font-mono">
+                              {selectedGithubAsset.size.toLocaleString()} bytes
+                            </div>
                           </div>
-                          <div className="text-lg font-extrabold text-neutral-900 font-mono">
-                            {formatBytes(selectedGithubAsset.size)}
-                          </div>
-                          <div className="text-[11px] text-neutral-500 font-mono">
-                            {selectedGithubAsset.size.toLocaleString()} bytes
+
+                          <div className="flex flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleRefreshAssetSize(selectedGithubAsset)}
+                              disabled={isRefreshingSize}
+                              title="Re-probe GitHub to verify updated file size"
+                              className="p-1.5 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-md text-neutral-700 hover:text-neutral-900 cursor-pointer transition-colors shadow-2xs"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingSize ? 'animate-spin text-emerald-600' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingSize(!isEditingSize)}
+                              title="Edit size manually"
+                              className="p-1.5 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-md text-neutral-700 hover:text-neutral-900 cursor-pointer transition-colors shadow-2xs"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
