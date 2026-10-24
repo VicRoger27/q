@@ -16,6 +16,7 @@ export interface ShareItem {
   sourceType?: 'local_encrypted' | 'github';
   githubRepo?: string;
   githubReleaseTag?: string;
+  githubDownloadUrl?: string;
 }
 
 export interface GitHubMatchedAsset {

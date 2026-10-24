@@ -19,6 +19,12 @@ import {
 } from 'lucide-react';
 import { ShareItem } from '../types';
 import { formatBytes, formatDate } from '../utils/formatters';
+import {
+  getLocalShareById,
+  verifyLocalPassword,
+  decodeStatelessShare,
+  verifyStatelessPassword,
+} from '../utils/localShares';
 
 interface RecipientGateProps {
   shareId: string;
@@ -52,12 +58,42 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
       setLoading(true);
       setLoadError(null);
       try {
-        const res = await fetch(`/api/shares/${shareId}/info`);
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `Could not find file (${res.status})`);
+        let data: ShareItem | null = null;
+
+        // 1. Check for stateless encoded payload in URL (?d=...)
+        const urlParams = new URLSearchParams(window.location.search);
+        const statelessPayload = urlParams.get('d');
+        if (statelessPayload) {
+          data = decodeStatelessShare(statelessPayload);
         }
-        const data = await res.json();
+
+        // 2. If not stateless, try backend API
+        if (!data) {
+          try {
+            const res = await fetch(`/api/shares/${shareId}/info`);
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              if (res.ok) {
+                data = await res.json();
+              } else {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || `Could not find file (${res.status})`);
+              }
+            }
+          } catch (fetchErr: any) {
+            console.warn('Backend /api/shares/info fetch failed, falling back to local shares:', fetchErr.message);
+          }
+        }
+
+        // 3. Fallback to browser local storage
+        if (!data) {
+          data = getLocalShareById(shareId);
+        }
+
+        if (!data) {
+          throw new Error('This share link could not be found or has expired.');
+        }
+
         if (isMounted) {
           setShareInfo(data);
         }
@@ -100,22 +136,58 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     setVerifyError(null);
 
     try {
-      const res = await fetch(`/api/shares/${shareId}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: password.trim() }),
-      });
+      let verifiedToken: string | null = null;
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (data.locked && data.waitSeconds) {
-          setLockoutSeconds(data.waitSeconds);
+      // 1. Check stateless token verification
+      const urlParams = new URLSearchParams(window.location.search);
+      const statelessPayload = urlParams.get('d');
+      if (statelessPayload) {
+        const isCorrect = verifyStatelessPassword(statelessPayload, password.trim());
+        if (isCorrect) {
+          verifiedToken = 'stateless_' + btoa(password.trim());
+        } else {
+          throw new Error('Incorrect password');
         }
-        throw new Error(data.error || 'Incorrect password');
       }
 
-      setAccessToken(data.accessToken);
+      // 2. If not verified via stateless token, try backend API
+      if (!verifiedToken) {
+        try {
+          const res = await fetch(`/api/shares/${shareId}/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: password.trim() }),
+          });
+
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json();
+            if (!res.ok) {
+              if (data.locked && data.waitSeconds) {
+                setLockoutSeconds(data.waitSeconds);
+              }
+              throw new Error(data.error || 'Incorrect password');
+            }
+            verifiedToken = data.accessToken;
+          }
+        } catch (backendErr: any) {
+          if (backendErr.message && backendErr.message.includes('Incorrect password')) {
+            throw backendErr;
+          }
+        }
+      }
+
+      // 3. Fallback to localStorage password check
+      if (!verifiedToken) {
+        const isCorrect = verifyLocalPassword(shareId, password.trim());
+        if (isCorrect) {
+          verifiedToken = 'local_' + btoa(password.trim());
+        } else {
+          throw new Error('Incorrect password');
+        }
+      }
+
+      setAccessToken(verifiedToken);
     } catch (err: any) {
       setVerifyError(err.message || 'Failed to verify password.');
     } finally {
@@ -127,14 +199,25 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     if (!accessToken && !shareInfo) return;
     setDownloadStarted(true);
 
-    const downloadUrl = `/api/shares/${shareId}/download?token=${encodeURIComponent(accessToken || '')}&pwd=${encodeURIComponent(password)}`;
-
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.setAttribute('download', shareInfo?.filename || 'download');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (shareInfo?.sourceType === 'github' && shareInfo.githubDownloadUrl) {
+      // Direct stream download from GitHub CDN
+      const link = document.createElement('a');
+      link.href = shareInfo.githubDownloadUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.setAttribute('download', shareInfo?.filename || 'download');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const downloadUrl = `/api/shares/${shareId}/download?token=${encodeURIComponent(accessToken || '')}&pwd=${encodeURIComponent(password)}`;
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', shareInfo?.filename || 'download');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
 
     if (shareInfo) {
       setShareInfo({

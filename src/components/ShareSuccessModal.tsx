@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ShareItem } from '../types';
 import { formatBytes } from '../utils/formatters';
+import { encodeStatelessShare } from '../utils/localShares';
 
 interface ShareSuccessModalProps {
   share: ShareItem;
@@ -42,8 +43,13 @@ export const ShareSuccessModal: React.FC<ShareSuccessModalProps> = ({
     ? `https://${domain}`
     : window.location.origin;
 
-  const shareUrl = `${activeBaseUrl}/share/${share.id}`;
-  const embedUrl = `${activeBaseUrl}/embed/${share.id}`;
+  const statelessToken = share.sourceType === 'github' ? encodeStatelessShare(share, passwordUsed) : '';
+  const shareUrl = statelessToken
+    ? `${activeBaseUrl}/share/${share.id}?d=${statelessToken}`
+    : `${activeBaseUrl}/share/${share.id}`;
+  const embedUrl = statelessToken
+    ? `${activeBaseUrl}/embed/${share.id}?d=${statelessToken}`
+    : `${activeBaseUrl}/embed/${share.id}`;
 
   const iframeSnippet = `<iframe src="${embedUrl}" width="100%" height="460" frameborder="0" allow="clipboard-write" style="border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); max-width: 640px; display: block; margin: 0 auto;"></iframe>`;
 

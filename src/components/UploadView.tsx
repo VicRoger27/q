@@ -29,6 +29,8 @@ import {
   generateRandomPassword,
 } from '../utils/formatters';
 import { uploadLargeFile, zipFolderFiles } from '../utils/uploader';
+import { scanGitHubReleasesClient } from '../utils/github';
+import { saveLocalShare } from '../utils/localShares';
 
 interface UploadViewProps {
   onUploadSuccess: (share: ShareItem, passwordUsed: string) => void;
@@ -139,7 +141,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
   const handleScanGithub = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!githubRepoUrl.trim()) {
-      setGithubScanError('Please enter a GitHub repository URL or owner/repo.');
+      setGithubScanError('Please enter a GitHub repository URL or owner/repo (e.g. VicRoger27/proj1).');
       return;
     }
 
@@ -149,24 +151,15 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     setGithubMatches([]);
 
     try {
-      const res = await fetch('/api/github/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repoUrl: githubRepoUrl.trim(),
-          targetFilename: targetPattern.trim(),
-          token: githubToken.trim() || undefined,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to scan repository.');
-      }
+      const data = await scanGitHubReleasesClient(
+        githubRepoUrl.trim(),
+        targetPattern.trim(),
+        githubToken.trim() || undefined
+      );
 
       if (!data.matches || data.matches.length === 0) {
         setGithubScanError(
-          `No files matching "${targetPattern}" were found in ${data.owner}/${data.repo} releases or repository contents. Try uploading a release asset named "${targetPattern}" on GitHub or check the filename.`
+          `No files matching "${targetPattern}" were found in ${data.owner}/${data.repo} releases. If you haven't uploaded the file to GitHub yet, create a release at github.com/${data.owner}/${data.repo}/releases or switch to Tab 1 to upload directly!`
         );
       } else {
         setGithubMatches(data.matches);
@@ -198,28 +191,66 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/github/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repoUrl: githubRepoUrl.trim(),
-          downloadUrl: selectedGithubAsset.downloadUrl,
-          filename: selectedGithubAsset.name,
-          fileSize: selectedGithubAsset.size,
-          password: password.trim(),
-          title: title.trim() || selectedGithubAsset.name,
-          description: description.trim(),
-          expiryDays: expiryDays > 0 ? expiryDays : undefined,
-          releaseTag: selectedGithubAsset.releaseTag,
-        }),
-      });
+      let createdShare: ShareItem | null = null;
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to import file from GitHub.');
+      // Attempt to register with backend proxy if available
+      try {
+        const res = await fetch('/api/github/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repoUrl: githubRepoUrl.trim(),
+            downloadUrl: selectedGithubAsset.downloadUrl,
+            filename: selectedGithubAsset.name,
+            fileSize: selectedGithubAsset.size,
+            password: password.trim(),
+            title: title.trim() || selectedGithubAsset.name,
+            description: description.trim(),
+            expiryDays: expiryDays > 0 ? expiryDays : undefined,
+            releaseTag: selectedGithubAsset.releaseTag,
+          }),
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          if (res.ok && data.share) {
+            createdShare = data.share;
+          }
+        }
+      } catch (backendErr) {
+        console.warn('Backend /api/github/import unavailable, continuing with client-side fallback:', backendErr);
       }
 
-      onUploadSuccess(data.share, password.trim());
+      // If backend is not running (e.g. static Vercel deployment), generate client share
+      if (!createdShare) {
+        const shareId = 'gh_' + Math.random().toString(36).substring(2, 10);
+        const expiresAt = expiryDays > 0 ? new Date(Date.now() + expiryDays * 86400000).toISOString() : null;
+        createdShare = {
+          id: shareId,
+          title: title.trim() || selectedGithubAsset.name,
+          description: description.trim(),
+          filename: selectedGithubAsset.name,
+          fileSize: selectedGithubAsset.size || 0,
+          fileType: 'application/zip',
+          createdAt: new Date().toISOString(),
+          expiresAt,
+          isFolder: false,
+          hasPassword: true,
+          isEncrypted: false,
+          sourceType: 'github',
+          githubRepo: githubRepoUrl.trim(),
+          githubReleaseTag: selectedGithubAsset.releaseTag,
+          githubDownloadUrl: selectedGithubAsset.downloadUrl,
+          downloadCount: 0,
+        };
+      }
+
+      // Save to local storage for instant access across sessions
+      if (createdShare) {
+        saveLocalShare(createdShare, password.trim());
+        onUploadSuccess(createdShare, password.trim());
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to create GitHub share.');
     } finally {
@@ -660,16 +691,42 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
           {/* TAB 3: GitHub Releases Grabber (Bypasses GitHub 25MB commit limit with free 2GB+ Releases) */}
           {sourceMode === 'github' && (
             <div className="space-y-6">
+              {/* Explanatory callouts */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950">
+                  <div className="font-bold text-amber-900 flex items-center gap-1.5 mb-1">
+                    <Upload className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Have the file on your computer?</span>
+                  </div>
+                  <p className="leading-relaxed text-[11px] text-amber-900/90">
+                    You do <strong>not</strong> need GitHub! Switch to <strong>Tab 1: Single File / Zip (Up to 1GB)</strong> above to upload your 500MB file straight from your computer. It handles chunked streaming, AES-256 encryption, and instant share links with zero setup.
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950">
+                  <div className="font-bold text-emerald-900 flex items-center gap-1.5 mb-1">
+                    <CloudLightning className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Want free GitHub permanent hosting?</span>
+                  </div>
+                  <p className="leading-relaxed text-[11px] text-emerald-900/90">
+                    GitHub does not auto-generate releases. Create one at <code className="bg-white/80 px-1 py-0.2 rounded font-mono">github.com/owner/repo/releases/new</code>, attach your 500MB zip file, and publish! Then enter the repo or direct URL below.
+                  </p>
+                </div>
+              </div>
+
               {/* Informational banner explaining 25MB repo limit vs Unlimited Releases */}
-              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-start gap-3">
-                <CloudLightning className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-950 leading-relaxed">
-                  <div className="font-bold text-sm text-emerald-900 mb-0.5">
-                    GitHub Releases Engine (Bypasses 25MB Limit)
+              <div className="p-4 bg-neutral-900 text-white rounded-xl flex items-start gap-3">
+                <Github className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-xs leading-relaxed space-y-1">
+                  <div className="font-bold text-sm text-white flex items-center gap-2">
+                    <span>GitHub Releases vs Git Commits</span>
+                    <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold">
+                      Zero Vercel Storage Cost
+                    </span>
                   </div>
-                  <div>
-                    Standard GitHub git commits block any files over <strong className="text-rose-700">25MB</strong>. However, <strong>GitHub Releases allow unlimited binary asset hosting (up to 2GB+ per file) for free</strong>. VaultDrop scans your repository's Releases to find <code className="bg-white/90 px-1.5 py-0.5 rounded font-mono text-emerald-950 font-bold">{targetPattern}</code> (or any TARGET.7z / archive) so you never pay Vercel or cloud storage fees!
-                  </div>
+                  <p className="text-neutral-300 text-[11px]">
+                    Git commits block files over 25MB. But <strong>GitHub Releases allow unlimited files up to 2GB+ each</strong>. You can paste a repository name (e.g. <code className="text-emerald-300 font-mono">VicRoger27/proj1</code>) or a direct release download URL (e.g. <code className="text-emerald-300 font-mono">https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip</code>).
+                  </p>
                 </div>
               </div>
 
@@ -679,12 +736,21 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                 <button
                   type="button"
                   onClick={() => {
-                    setGithubRepoUrl('VicRoger27/q');
-                    setTargetPattern('TARGET.zip');
+                    setGithubRepoUrl('VicRoger27/proj1');
+                    setTargetPattern('zip.zip');
                   }}
                   className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-md transition-colors cursor-pointer font-mono font-medium"
                 >
-                  VicRoger27/q (TARGET.zip)
+                  VicRoger27/proj1 (zip.zip)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGithubRepoUrl('https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip');
+                  }}
+                  className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-md transition-colors cursor-pointer font-mono font-medium"
+                >
+                  Direct TARGET/zip.zip URL
                 </button>
                 <button
                   type="button"
@@ -695,17 +761,17 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                 </button>
                 <button
                   type="button"
+                  onClick={() => setTargetPattern('zip.zip')}
+                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'zip.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                >
+                  zip.zip
+                </button>
+                <button
+                  type="button"
                   onClick={() => setTargetPattern('TARGET.7z')}
                   className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.7z' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
                 >
                   TARGET.7z
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTargetPattern('TARGET')}
-                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
-                >
-                  TARGET.*
                 </button>
               </div>
 
