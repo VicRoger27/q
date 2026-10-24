@@ -421,10 +421,16 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 text-xs text-neutral-500 mt-1 font-mono tabular-nums">
-                  <span className="font-semibold text-neutral-700">{formatBytes(shareInfo.fileSize)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{formatDate(shareInfo.createdAt)}</span>
+                <div className="flex items-center gap-2 text-xs mt-1.5 flex-wrap">
+                  <span className="font-mono font-bold text-neutral-900 bg-neutral-200 px-2 py-0.5 rounded text-xs">
+                    📦 {formatBytes(shareInfo.fileSize)}
+                  </span>
+                  <span className="text-neutral-400">·</span>
+                  <span className="text-neutral-500 font-mono text-[11px]">
+                    {shareInfo.fileSize.toLocaleString()} bytes
+                  </span>
+                  <span className="text-neutral-400">·</span>
+                  <span className="text-neutral-500 text-[11px]">{formatDate(shareInfo.createdAt)}</span>
                 </div>
               </div>
             </div>
@@ -468,6 +474,17 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
           {!accessToken ? (
             /* Locked State: Password Challenge */
             <form onSubmit={handleVerify} className="space-y-4">
+              {/* Prominent File Size Detail Bar */}
+              <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg flex items-center justify-between">
+                <span className="text-xs font-semibold text-neutral-700 flex items-center gap-1.5">
+                  <FileArchive className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>File Size:</span>
+                </span>
+                <span className="text-xs font-mono font-bold text-neutral-900 bg-white px-2 py-0.5 rounded border border-neutral-200 shadow-2xs">
+                  {formatBytes(shareInfo.fileSize)} ({shareInfo.fileSize.toLocaleString()} bytes)
+                </span>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-neutral-800 uppercase tracking-wider mb-1.5">
                   Enter Password to Unlock File
@@ -532,7 +549,7 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
                 ) : (
                   <>
                     <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Unlock & Access Download</span>
+                    <span>Unlock & Access File ({formatBytes(shareInfo.fileSize)})</span>
                   </>
                 )}
               </button>

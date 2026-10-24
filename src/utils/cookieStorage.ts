@@ -116,6 +116,52 @@ export function clearSavedGitHubToken(): void {
 }
 
 /**
+ * Export and download the saved PAT / cookie data as a local file onto the user's computer.
+ */
+export function downloadGitHubTokenBackup(token?: string): boolean {
+  const tokenToSave = (token && token.trim()) || getSavedGitHubToken();
+  if (!tokenToSave) return false;
+
+  const now = new Date();
+  const dateStr = now.toISOString().replace(/T/, ' ').replace(/\..+/, '');
+  const timestamp = now.toISOString().slice(0, 10);
+
+  const fileContent = `# ===================================================
+# VaultDrop - GitHub Personal Access Token (PAT) Backup
+# Stored on device cookie: vaultdrop_gh_token
+# Exported on: ${dateStr}
+# ===================================================
+
+GITHUB_PAT=${tokenToSave}
+
+# Quick Info:
+# - Scope: repo (Grants access to private GitHub releases)
+# - Cookie Name: vaultdrop_gh_token
+# - Stored Locally: Yes (Strict SameSite cookie on your device)
+
+# Instructions:
+# To restore or use in VaultDrop on this or another browser,
+# copy this token and paste it into the "GitHub Token" field.
+`;
+
+  try {
+    const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `vaultdrop-github-pat-${timestamp}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return true;
+  } catch (err) {
+    console.error('Failed to download PAT backup file:', err);
+    return false;
+  }
+}
+
+/**
  * Check if the user previously enabled "Remember on this device"
  */
 export function isRememberTokenEnabled(): boolean {

@@ -97,20 +97,23 @@ export const ShareSuccessModal: React.FC<ShareSuccessModalProps> = ({
           </div>
         </div>
 
-        {/* File Summary */}
-        <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl mb-6 flex items-center justify-between gap-4">
+        {/* File Summary with Prominent File Size */}
+        <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl mb-6 flex items-center justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-neutral-900 truncate">
+            <div className="text-xs font-bold text-neutral-900 truncate">
               {share.title || share.filename}
             </div>
-            <div className="text-[11px] text-neutral-500 font-mono truncate">
-              {share.filename} · {formatBytes(share.fileSize)}
+            <div className="text-[11px] text-neutral-500 font-mono truncate mt-0.5">
+              {share.filename}
             </div>
           </div>
 
-          <div className="text-right shrink-0">
-            <span className="text-[11px] font-semibold text-neutral-600 bg-neutral-200/70 px-2 py-0.5 rounded">
-              Share ID: {share.id}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs font-mono font-bold text-neutral-900 bg-white border border-neutral-200 px-2.5 py-1 rounded-md shadow-2xs">
+              📦 {formatBytes(share.fileSize)}
+            </span>
+            <span className="text-[11px] font-semibold text-neutral-600 bg-neutral-200/70 px-2 py-1 rounded-md">
+              ID: {share.id}
             </span>
           </div>
         </div>

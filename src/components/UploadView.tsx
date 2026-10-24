@@ -22,6 +22,7 @@ import {
   Cookie,
   Trash2,
   HardDrive,
+  Download,
 } from 'lucide-react';
 import { UploadState, ShareItem, GitHubMatchedAsset } from '../types';
 import {
@@ -39,6 +40,7 @@ import {
   saveGitHubTokenToCookie,
   clearSavedGitHubToken,
   isRememberTokenEnabled,
+  downloadGitHubTokenBackup,
 } from '../utils/cookieStorage';
 
 interface UploadViewProps {
@@ -189,6 +191,20 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     setIsTokenSavedInCookie(false);
     setCookieNotification('Token completely erased from device');
     setTimeout(() => setCookieNotification(null), 3000);
+  };
+
+  const handleDownloadTokenFile = () => {
+    const tokenToDownload = githubToken.trim() || getSavedGitHubToken();
+    if (!tokenToDownload) {
+      setCookieNotification('No PAT saved to download. Paste a token first.');
+      setTimeout(() => setCookieNotification(null), 3000);
+      return;
+    }
+    const success = downloadGitHubTokenBackup(tokenToDownload);
+    if (success) {
+      setCookieNotification('PAT backup file downloaded to your device!');
+      setTimeout(() => setCookieNotification(null), 3500);
+    }
   };
 
   const handleGeneratePassword = () => {
@@ -544,36 +560,54 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                 </div>
               )}
 
-              {/* Selected File Card */}
+              {/* Selected File Card with Prominent File Size */}
               {selectedFile && !uploadState?.isUploading && (
-                <div className="flex items-center justify-between p-4 bg-neutral-50 border border-neutral-200 rounded-lg">
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <div className="w-10 h-10 rounded-lg bg-white border border-neutral-200 flex items-center justify-center shrink-0">
-                      <FileArchive className="w-5 h-5 text-emerald-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-neutral-900 truncate">
-                        {selectedFile.name}
+                <div className="p-4 bg-neutral-50 border border-neutral-200 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-11 h-11 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                        <FileArchive className="w-5 h-5 text-emerald-400" />
                       </div>
-                      <div className="text-xs text-neutral-500 flex items-center gap-2 font-mono tabular-nums">
-                        <span>{formatBytes(selectedFile.size)}</span>
-                        <span aria-hidden="true">·</span>
-                        <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                          <Lock className="w-3 h-3" />
-                          <span>AES-256 at Rest</span>
-                        </span>
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-neutral-900 truncate">
+                          {selectedFile.name}
+                        </div>
+                        <div className="text-xs text-neutral-500 flex items-center gap-2 font-mono tabular-nums">
+                          <span>{selectedFile.type || 'Archive Payload'}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                            <Lock className="w-3 h-3" />
+                            <span>AES-256 at Rest</span>
+                          </span>
+                        </div>
                       </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(null)}
+                      className="p-1.5 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200/60 rounded-md transition-colors cursor-pointer shrink-0"
+                      title="Remove file"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFile(null)}
-                    className="p-1.5 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200/60 rounded-md transition-colors cursor-pointer"
-                    title="Remove file"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  {/* Prominent File Size Banner */}
+                  <div className="p-3 bg-white border border-neutral-200 rounded-lg flex items-center justify-between flex-wrap gap-2">
+                    <div className="text-xs text-neutral-600 font-semibold flex items-center gap-1.5">
+                      <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Total Payload Size:</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-1 bg-neutral-900 text-white rounded font-mono text-xs font-bold">
+                        {formatBytes(selectedFile.size)}
+                      </span>
+                      <span className="text-[11px] text-neutral-500 font-mono">
+                        ({selectedFile.size.toLocaleString()} bytes)
+                      </span>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -900,17 +934,28 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         {(githubToken || isTokenSavedInCookie) && (
-                          <button
-                            type="button"
-                            onClick={handleClearSavedToken}
-                            title="Clear token and wipe cookie from this device"
-                            className="text-[11px] font-medium text-neutral-500 hover:text-rose-600 flex items-center gap-0.5 cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            <span>Clear</span>
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleDownloadTokenFile}
+                              title="Download PAT from cookie as a text file backup"
+                              className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded flex items-center gap-1 cursor-pointer transition-colors"
+                            >
+                              <Download className="w-3 h-3 text-emerald-600" />
+                              <span>Download PAT</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleClearSavedToken}
+                              title="Clear token and wipe cookie from this device"
+                              className="text-[11px] font-medium text-neutral-500 hover:text-rose-600 flex items-center gap-0.5 cursor-pointer px-1"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Clear</span>
+                            </button>
+                          </>
                         )}
                         <button
                           type="button"
@@ -930,7 +975,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                       className="w-full px-3.5 py-2.5 bg-neutral-50 border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                     />
 
-                    {/* Cookie storage toggle & notification */}
+                    {/* Cookie storage toggle & download button */}
                     <div className="flex items-center justify-between pt-0.5">
                       <label className="flex items-center gap-1.5 text-[11px] text-neutral-700 cursor-pointer select-none">
                         <input
@@ -948,10 +993,22 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                       )}
                     </div>
 
+                    <div className="pt-1 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDownloadTokenFile}
+                        disabled={!githubToken.trim() && !isTokenSavedInCookie}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white font-medium text-xs shadow-xs transition-colors cursor-pointer disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed"
+                      >
+                        <Download className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Download Cookie / PAT Backup (.txt)</span>
+                      </button>
+                    </div>
+
                     <div className="flex items-start gap-1.5 p-2 bg-emerald-50/70 border border-emerald-200/70 rounded-md text-[11px] text-emerald-900 leading-tight">
                       <HardDrive className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
                       <span>
-                        <strong>Device-only privacy:</strong> Saved in your browser's <code className="bg-white/80 px-1 py-0.2 rounded font-mono text-emerald-800">SameSite=Strict</code> cookie. It stays on your device and scans GitHub directly without routing through external servers.
+                        <strong>Device-only privacy:</strong> Saved in your browser's <code className="bg-white/80 px-1 py-0.2 rounded font-mono text-emerald-800">SameSite=Strict</code> cookie. Click "Download Cookie / PAT" to save an offline backup on your computer.
                       </span>
                     </div>
                   </div>
@@ -1070,8 +1127,8 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                           }`}
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-9 h-9 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
-                              <FileArchive className="w-4 h-4 text-emerald-400" />
+                            <div className="w-10 h-10 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                              <FileArchive className="w-5 h-5 text-emerald-400" />
                             </div>
                             <div className="min-w-0">
                               <div className="text-xs font-bold text-neutral-900 flex items-center gap-2 truncate">
@@ -1087,13 +1144,23 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[11px] text-neutral-500 font-mono tabular-nums mt-0.5">
-                                {asset.size > 0 ? formatBytes(asset.size) : 'Direct Release Stream'} · Attached to GitHub Release
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                <span className="inline-flex items-center gap-1 font-mono text-xs font-bold text-neutral-900 bg-neutral-200/90 px-2 py-0.5 rounded">
+                                  📦 {formatBytes(asset.size)}
+                                </span>
+                                <span className="text-[11px] text-neutral-500 font-mono">
+                                  ({asset.size.toLocaleString()} bytes)
+                                </span>
+                                <span className="text-neutral-400">·</span>
+                                <span className="text-[11px] text-neutral-500">Direct GitHub Release</span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="shrink-0 ml-3">
+                          <div className="shrink-0 ml-3 flex items-center gap-2">
+                            <span className="hidden sm:inline-block font-mono text-xs font-bold text-neutral-900 bg-white border border-neutral-200 px-2 py-1 rounded shadow-2xs">
+                              {formatBytes(asset.size)}
+                            </span>
                             {selectedGithubAsset?.downloadUrl === asset.downloadUrl ? (
                               <div className="w-6 h-6 rounded-full bg-neutral-900 text-white flex items-center justify-center">
                                 <Check className="w-3.5 h-3.5 stroke-[3]" />
@@ -1110,6 +1177,34 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                   {/* Password & Security Configuration for GitHub File */}
                   {selectedGithubAsset && (
                     <form onSubmit={handleImportGithub} className="pt-4 border-t border-neutral-200 space-y-5">
+                      {/* Prominent Selected Asset & File Size Banner */}
+                      <div className="p-4 bg-emerald-50/80 border border-emerald-300 rounded-xl flex items-center justify-between flex-wrap gap-4">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                            <FileArchive className="w-5 h-5 text-emerald-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-neutral-900 truncate">
+                              {selectedGithubAsset.name}
+                            </div>
+                            <div className="text-xs text-neutral-600 font-mono">
+                              Release: {selectedGithubAsset.releaseTag || 'Release Asset'} · Zero Storage Fees
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
+                            Verified File Size
+                          </div>
+                          <div className="text-lg font-extrabold text-neutral-900 font-mono">
+                            {formatBytes(selectedGithubAsset.size)}
+                          </div>
+                          <div className="text-[11px] text-neutral-500 font-mono">
+                            {selectedGithubAsset.size.toLocaleString()} bytes
+                          </div>
+                        </div>
+                      </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">
