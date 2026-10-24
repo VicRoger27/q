@@ -103,7 +103,7 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
           throw new Error('This share link could not be found or has expired.');
         }
 
-        // Auto-probe real size if share was saved when GitHub release was 0 bytes or updated from 0 to 500MB
+        // Auto-probe real size if share was saved when GitHub release was 0 bytes or updated after publish
         if (data && data.sourceType === 'github' && (!data.fileSize || data.fileSize === 0)) {
           try {
             const probeRes = await fetch('/api/github/probe-asset', {

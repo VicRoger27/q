@@ -114,7 +114,7 @@ export async function scanGitHubReleasesClient(
 
   // ----------------------------------------------------
   // CASE 1: Direct Release Asset Link
-  // (e.g. https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip)
+  // (e.g. https://github.com/owner/repository/releases/download/v1.0.0/archive.zip)
   // ----------------------------------------------------
   if (directAsset) {
     let resolvedId: number | undefined = undefined;

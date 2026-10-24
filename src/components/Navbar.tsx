@@ -40,7 +40,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab, domain }
                 : 'hover:text-neutral-900'
             }`}
           >
-            Upload (500MB+)
+            Upload (Large Files)
           </button>
           <button
             onClick={() => onSelectTab('shares')}

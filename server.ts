@@ -210,7 +210,7 @@ app.post('/api/github/scan', async (req, res) => {
 
     const { owner, repo, directAsset } = parsed;
 
-    // If user provided a direct release asset link: e.g. https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip
+    // If user provided a direct release asset link: e.g. https://github.com/owner/repo/releases/download/v1.0.0/archive.zip
     if (directAsset) {
       return res.json({
         success: true,

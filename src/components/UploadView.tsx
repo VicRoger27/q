@@ -79,7 +79,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
   const [showPrivateGuide, setShowPrivateGuide] = useState(false);
   const [isRefreshingSize, setIsRefreshingSize] = useState(false);
   const [isEditingSize, setIsEditingSize] = useState(false);
-  const [customSizeMb, setCustomSizeMb] = useState('500');
+  const [customSizeMb, setCustomSizeMb] = useState('');
 
   // Upload progress state
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
@@ -222,7 +222,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
   const handleScanGithub = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!githubRepoUrl.trim()) {
-      setGithubScanError('Please enter a GitHub repository URL or owner/repo (e.g. VicRoger27/proj1).');
+      setGithubScanError('Please enter a GitHub repository URL or owner/repo (e.g. owner/repository).');
       return;
     }
 
@@ -865,7 +865,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                     <span>Have the file on your computer?</span>
                   </div>
                   <p className="leading-relaxed text-[11px] text-amber-900/90">
-                    You do <strong>not</strong> need GitHub! Switch to <strong>Tab 1: Single File / Zip (Up to 1GB)</strong> above to upload your 500MB file straight from your computer. It handles chunked streaming, AES-256 encryption, and instant share links with zero setup.
+                    You do <strong>not</strong> need GitHub! Switch to <strong>Tab 1: Single File / Zip (Up to 1GB)</strong> above to upload your file straight from your computer. It handles chunked streaming, AES-256 encryption, and instant share links with zero setup.
                   </p>
                 </div>
 
@@ -875,7 +875,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                     <span>Want free GitHub permanent hosting?</span>
                   </div>
                   <p className="leading-relaxed text-[11px] text-emerald-900/90">
-                    GitHub does not auto-generate releases. Create one at <code className="bg-white/80 px-1 py-0.2 rounded font-mono">github.com/owner/repo/releases/new</code>, attach your 500MB zip file, and publish! Then enter the repo or direct URL below.
+                    GitHub does not auto-generate releases. Create one at <code className="bg-white/80 px-1 py-0.2 rounded font-mono">github.com/owner/repo/releases/new</code>, attach your archive or binary asset, and publish! Then enter the repo or direct URL below.
                   </p>
                 </div>
               </div>
@@ -891,53 +891,48 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                     </span>
                   </div>
                   <p className="text-neutral-300 text-[11px]">
-                    Git commits block files over 25MB. But <strong>GitHub Releases allow unlimited files up to 2GB+ each</strong>. You can paste a repository name (e.g. <code className="text-emerald-300 font-mono">VicRoger27/proj1</code>) or a direct release download URL (e.g. <code className="text-emerald-300 font-mono">https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip</code>).
+                    Git commits block files over 25MB. But <strong>GitHub Releases allow unlimited files up to 2GB+ each</strong>. You can paste a repository name (e.g. <code className="text-emerald-300 font-mono">owner/repository</code>) or a direct release download URL (e.g. <code className="text-emerald-300 font-mono">https://github.com/owner/repo/releases/download/v1.0.0/release.zip</code>).
                   </p>
                 </div>
               </div>
 
-              {/* Quick Preset Buttons */}
+              {/* Target File Pattern Filters */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-neutral-500 font-semibold">Quick Presets:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGithubRepoUrl('VicRoger27/proj1');
-                    setTargetPattern('zip.zip');
-                  }}
-                  className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-md transition-colors cursor-pointer font-mono font-medium"
-                >
-                  VicRoger27/proj1 (zip.zip)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGithubRepoUrl('https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip');
-                  }}
-                  className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-md transition-colors cursor-pointer font-mono font-medium"
-                >
-                  Direct TARGET/zip.zip URL
-                </button>
+                <span className="text-neutral-500 font-semibold">Quick Filters:</span>
                 <button
                   type="button"
                   onClick={() => setTargetPattern('TARGET.zip')}
-                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                  className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'}`}
                 >
                   TARGET.zip
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTargetPattern('zip.zip')}
-                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'zip.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                  onClick={() => setTargetPattern('*.zip')}
+                  className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === '*.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'}`}
                 >
-                  zip.zip
+                  *.zip
                 </button>
                 <button
                   type="button"
                   onClick={() => setTargetPattern('TARGET.7z')}
-                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.7z' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                  className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.7z' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'}`}
                 >
                   TARGET.7z
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetPattern('*.tar.gz')}
+                  className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === '*.tar.gz' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'}`}
+                >
+                  *.tar.gz
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetPattern('*')}
+                  className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === '*' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'}`}
+                >
+                  All Assets (*)
                 </button>
               </div>
 
@@ -952,7 +947,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                       type="text"
                       value={githubRepoUrl}
                       onChange={(e) => setGithubRepoUrl(e.target.value)}
-                      placeholder="e.g. VicRoger27/proj1 or https://github.com/..."
+                      placeholder="e.g. owner/repo or https://github.com/..."
                       required
                       className="w-full px-3.5 py-2.5 bg-neutral-50 border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                     />
@@ -1104,7 +1099,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                         </li>
                       </ol>
                       <p className="text-[10px] text-neutral-400">
-                        This token will automatically work for <code className="text-neutral-300 font-mono">VicRoger27/proj1</code> and <strong>any future private repo</strong> you create.
+                        This token will automatically grant access to your private repository and <strong>any future private repo</strong> you create.
                       </p>
                     </div>
 
@@ -1249,7 +1244,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                                 GitHub API Cached / Reported 0 MB for this Release Asset
                               </div>
                               <p className="text-[11px] text-amber-800 leading-relaxed mt-0.5">
-                                If you uploaded your 500MB file after creating the release, or switched the repository to private, browsers and GitHub's REST cache often return 0 bytes until refreshed.
+                                If you recently attached or updated this asset in GitHub Releases, or if it is in a private repo, GitHub's API metadata may take a moment to report the updated byte size.
                               </p>
                             </div>
                           </div>
@@ -1266,18 +1261,11 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleApplyCustomSize(500)}
-                              className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg font-bold text-xs cursor-pointer transition-colors shadow-2xs"
-                            >
-                              ⚡ Set to 500 MB (proj1)
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => setIsEditingSize(!isEditingSize)}
-                              className="px-2.5 py-1.5 text-amber-900 hover:text-amber-950 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                              className="px-2.5 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
                             >
                               <Edit3 className="w-3 h-3" />
-                              <span>Custom size</span>
+                              <span>{isEditingSize ? 'Close Custom Size' : 'Set Custom Size'}</span>
                             </button>
                           </div>
                         </div>
@@ -1303,7 +1291,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                               max="2048"
                               value={customSizeMb}
                               onChange={(e) => setCustomSizeMb(e.target.value)}
-                              placeholder="500"
+                              placeholder="e.g. 50"
                               className="w-28 px-2.5 py-1.5 bg-white border border-neutral-300 rounded text-xs font-mono"
                             />
                             <span className="font-semibold text-neutral-600">MB</span>
@@ -1317,6 +1305,13 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                             <div className="flex items-center gap-1 ml-auto">
                               <button
                                 type="button"
+                                onClick={() => handleApplyCustomSize(50)}
+                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer"
+                              >
+                                50MB
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => handleApplyCustomSize(100)}
                                 className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer"
                               >
@@ -1324,10 +1319,10 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleApplyCustomSize(500)}
-                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer font-bold text-emerald-700"
+                                onClick={() => handleApplyCustomSize(250)}
+                                className="px-2 py-1 bg-white border border-neutral-200 rounded text-[11px] font-mono hover:bg-neutral-50 cursor-pointer"
                               >
-                                500MB
+                                250MB
                               </button>
                               <button
                                 type="button"
