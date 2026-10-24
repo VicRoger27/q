@@ -657,30 +657,70 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
             </form>
           )}
 
-          {/* TAB 3: GitHub Repo Importer (Zero Hosting Cost Mode for TARGET.zip / TARGET.7z) */}
+          {/* TAB 3: GitHub Releases Grabber (Bypasses GitHub 25MB commit limit with free 2GB+ Releases) */}
           {sourceMode === 'github' && (
             <div className="space-y-6">
-              {/* Informational banner about zero hosting costs */}
+              {/* Informational banner explaining 25MB repo limit vs Unlimited Releases */}
               <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-start gap-3">
                 <CloudLightning className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-900 leading-relaxed">
-                  <span className="font-bold">Zero File Hosting Costs: </span>
-                  GitHub Releases allow uploading files up to 2GB for free. Enter your repository below and VaultDrop will automatically grab <code className="bg-white/80 px-1 py-0.5 rounded font-mono text-emerald-950 font-bold">{targetPattern}</code> (or any TARGET.7z / TARGET.* archive), wrapping it with a password gate, custom <code className="bg-white/80 px-1 py-0.5 rounded font-mono text-emerald-950 font-bold">{domain}</code> link, and embed code without incurring server storage fees!
+                <div className="text-xs text-emerald-950 leading-relaxed">
+                  <div className="font-bold text-sm text-emerald-900 mb-0.5">
+                    GitHub Releases Engine (Bypasses 25MB Limit)
+                  </div>
+                  <div>
+                    Standard GitHub git commits block any files over <strong className="text-rose-700">25MB</strong>. However, <strong>GitHub Releases allow unlimited binary asset hosting (up to 2GB+ per file) for free</strong>. VaultDrop scans your repository's Releases to find <code className="bg-white/90 px-1.5 py-0.5 rounded font-mono text-emerald-950 font-bold">{targetPattern}</code> (or any TARGET.7z / archive) so you never pay Vercel or cloud storage fees!
+                  </div>
                 </div>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-neutral-500 font-semibold">Quick Presets:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGithubRepoUrl('VicRoger27/q');
+                    setTargetPattern('TARGET.zip');
+                  }}
+                  className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-md transition-colors cursor-pointer font-mono font-medium"
+                >
+                  VicRoger27/q (TARGET.zip)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetPattern('TARGET.zip')}
+                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.zip' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                >
+                  TARGET.zip
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetPattern('TARGET.7z')}
+                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET.7z' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                >
+                  TARGET.7z
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetPattern('TARGET')}
+                  className={`px-2 py-1 rounded-md transition-colors cursor-pointer font-mono ${targetPattern === 'TARGET' ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700'}`}
+                >
+                  TARGET.*
+                </button>
               </div>
 
               {/* Search Form */}
               <form onSubmit={handleScanGithub} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                   <div className="md:col-span-6 space-y-1.5">
-                    <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider">
-                      GitHub Repository URL or "owner/repo"
+                    <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider flex items-center justify-between">
+                      <span>GitHub Repository or Release URL</span>
                     </label>
                     <input
                       type="text"
                       value={githubRepoUrl}
                       onChange={(e) => setGithubRepoUrl(e.target.value)}
-                      placeholder="e.g. the-vopple/my-portfolio or https://github.com/..."
+                      placeholder="e.g. VicRoger27/q or https://github.com/..."
                       required
                       className="w-full px-3.5 py-2.5 bg-neutral-50 border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                     />
@@ -702,7 +742,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
 
                   <div className="md:col-span-3 space-y-1.5">
                     <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider">
-                      GitHub Token <span className="text-neutral-400 font-normal">(Optional)</span>
+                      GitHub Token <span className="text-neutral-400 font-normal">(Private)</span>
                     </label>
                     <input
                       type="password"
@@ -714,14 +754,18 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                   </div>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-neutral-500">
+                    Scans GitHub Releases for attached 2GB+ binaries.
+                  </span>
+
                   <button
                     type="submit"
                     disabled={isScanningGithub || !githubRepoUrl.trim()}
                     className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer disabled:bg-neutral-300 shadow-xs"
                   >
                     <Search className="w-3.5 h-3.5" />
-                    <span>{isScanningGithub ? 'Scanning Releases & Files...' : 'Scan Repository for Target File'}</span>
+                    <span>{isScanningGithub ? 'Scanning Releases...' : 'Scan GitHub Releases'}</span>
                   </button>
                 </div>
               </form>
@@ -729,7 +773,10 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
               {githubScanError && (
                 <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{githubScanError}</span>
+                  <div>
+                    <div className="font-semibold">No release files found</div>
+                    <div className="mt-0.5">{githubScanError}</div>
+                  </div>
                 </div>
               )}
 
@@ -738,57 +785,65 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                 <div className="border border-neutral-200 rounded-xl p-5 bg-neutral-50 space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-neutral-900 uppercase tracking-wider">
-                      Discovered Files on GitHub ({githubMatches.length})
+                      Discovered Release Assets ({githubMatches.length})
                     </span>
-                    <span className="text-[11px] text-emerald-700 font-semibold">
-                      Direct CDN Streaming Ready
+                    <span className="text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      Free Unlimited CDN Hosting
                     </span>
                   </div>
 
                   <div className="space-y-2">
-                    {githubMatches.map((asset, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => {
-                          setSelectedGithubAsset(asset);
-                          if (!title) setTitle(asset.name.replace(/\.[^/.]+$/, ''));
-                        }}
-                        className={`p-3 rounded-lg border transition-all cursor-pointer flex items-center justify-between ${
-                          selectedGithubAsset?.downloadUrl === asset.downloadUrl
-                            ? 'bg-white border-neutral-900 shadow-xs'
-                            : 'bg-white/60 border-neutral-200 hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
-                            <FileArchive className="w-4 h-4 text-emerald-400" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-neutral-900 flex items-center gap-2">
-                              <span>{asset.name}</span>
-                              {asset.releaseTag && (
-                                <span className="text-[10px] text-neutral-500 font-mono bg-neutral-100 px-1.5 py-0.5 rounded">
-                                  {asset.releaseTag}
-                                </span>
-                              )}
+                    {githubMatches.map((asset, idx) => {
+                      const isTarget = asset.name.toLowerCase().startsWith('target');
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            setSelectedGithubAsset(asset);
+                            if (!title) setTitle(asset.name.replace(/\.[^/.]+$/, ''));
+                          }}
+                          className={`p-3.5 rounded-lg border transition-all cursor-pointer flex items-center justify-between ${
+                            selectedGithubAsset?.downloadUrl === asset.downloadUrl
+                              ? 'bg-white border-neutral-900 shadow-xs ring-1 ring-neutral-900'
+                              : 'bg-white/70 border-neutral-200 hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                              <FileArchive className="w-4 h-4 text-emerald-400" />
                             </div>
-                            <div className="text-[11px] text-neutral-500 font-mono tabular-nums">
-                              {formatBytes(asset.size)} · {asset.source === 'release' ? 'GitHub Release Asset' : 'Repo Tree File'}
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-neutral-900 flex items-center gap-2 truncate">
+                                <span>{asset.name}</span>
+                                {isTarget && (
+                                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded font-sans shrink-0">
+                                    Target Match
+                                  </span>
+                                )}
+                                {asset.releaseTag && (
+                                  <span className="text-[10px] text-neutral-600 font-mono bg-neutral-100 px-1.5 py-0.2 rounded shrink-0">
+                                    {asset.releaseTag}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-neutral-500 font-mono tabular-nums mt-0.5">
+                                {asset.size > 0 ? formatBytes(asset.size) : 'Direct Release Stream'} · Attached to GitHub Release
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div>
-                          {selectedGithubAsset?.downloadUrl === asset.downloadUrl ? (
-                            <div className="w-6 h-6 rounded-full bg-neutral-900 text-white flex items-center justify-center">
-                              <Check className="w-3.5 h-3.5" />
-                            </div>
-                          ) : (
-                            <div className="w-6 h-6 rounded-full border border-neutral-300" />
-                          )}
+                          <div className="shrink-0 ml-3">
+                            {selectedGithubAsset?.downloadUrl === asset.downloadUrl ? (
+                              <div className="w-6 h-6 rounded-full bg-neutral-900 text-white flex items-center justify-center">
+                                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                              </div>
+                            ) : (
+                              <div className="w-6 h-6 rounded-full border border-neutral-300" />
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Password & Security Configuration for GitHub File */}

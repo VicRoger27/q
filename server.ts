@@ -144,13 +144,31 @@ function verifyAccessToken(shareId: string, token: string): boolean {
   }
 }
 
-// Parse GitHub repository shorthand or full URL
-function parseGitHubRepo(input: string): { owner: string; repo: string } | null {
+// Parse GitHub repository shorthand, full URL, or direct release download URL
+function parseGitHubRepo(input: string): { owner: string; repo: string; directAsset?: { tag: string; filename: string; directUrl: string } } | null {
   const cleaned = input.trim().replace(/\.git$/, '');
-  const urlMatch = cleaned.match(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/);
-  if (urlMatch) {
-    return { owner: urlMatch[1], repo: urlMatch[2] };
+
+  // Direct release asset URL: https://github.com/owner/repo/releases/download/v1.0.0/TARGET.zip
+  const directMatch = cleaned.match(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/releases\/download\/([^/]+)\/(.+)$/);
+  if (directMatch) {
+    return {
+      owner: directMatch[1],
+      repo: directMatch[2],
+      directAsset: {
+        tag: directMatch[3],
+        filename: decodeURIComponent(directMatch[4]),
+        directUrl: cleaned,
+      },
+    };
   }
+
+  // Release tag URL: https://github.com/owner/repo/releases/tag/v1.0.0 or https://github.com/owner/repo/releases
+  const repoUrlMatch = cleaned.match(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/);
+  if (repoUrlMatch) {
+    return { owner: repoUrlMatch[1], repo: repoUrlMatch[2] };
+  }
+
+  // Shorthand owner/repo
   const shorthandMatch = cleaned.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)$/);
   if (shorthandMatch) {
     return { owner: shorthandMatch[1], repo: shorthandMatch[2] };
@@ -170,6 +188,133 @@ app.use((req, res, next) => {
   res.removeHeader('X-Frame-Options');
   res.setHeader('Content-Security-Policy', "frame-ancestors *;");
   next();
+});
+
+// 5. GitHub Releases Scanner: specifically targets GitHub Releases (which allow unlimited/2GB+ file assets, bypassing the 25MB repo limit)
+app.post('/api/github/scan', async (req, res) => {
+  try {
+    const { repoUrl, targetFilename, token } = req.body || {};
+
+    if (!repoUrl) {
+      return res.status(400).json({ error: 'GitHub repository or release URL is required.' });
+    }
+
+    const parsed = parseGitHubRepo(repoUrl);
+    if (!parsed) {
+      return res.status(400).json({ error: 'Invalid GitHub URL format. Use "owner/repo" or "https://github.com/owner/repo/releases".' });
+    }
+
+    const { owner, repo, directAsset } = parsed;
+
+    // If user provided a direct release asset link: e.g. https://github.com/VicRoger27/proj1/releases/download/TARGET/zip.zip
+    if (directAsset) {
+      return res.json({
+        success: true,
+        owner,
+        repo,
+        targetSearched: directAsset.filename,
+        count: 1,
+        isDirectAsset: true,
+        matches: [
+          {
+            name: directAsset.filename,
+            size: 0,
+            downloadUrl: directAsset.directUrl,
+            source: 'release',
+            releaseTag: directAsset.tag,
+            releaseName: `Release Tag "${directAsset.tag}" (${directAsset.filename})`,
+          },
+        ],
+      });
+    }
+
+    const headers: Record<string, string> = {
+      'User-Agent': 'VaultDrop-ReleaseGrabber/2.0',
+      'Accept': 'application/vnd.github.v3+json',
+    };
+    if (token && token.trim()) {
+      headers['Authorization'] = `token ${token.trim()}`;
+    }
+
+    const targetPattern = (targetFilename?.trim() || 'TARGET').toLowerCase();
+
+    // Query GitHub Releases endpoint
+    const releasesRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, { headers });
+    
+    if (!releasesRes.ok) {
+      const err = await releasesRes.json().catch(() => ({}));
+      if (releasesRes.status === 404) {
+        return res.status(404).json({
+          error: `Repository "${owner}/${repo}" was not found or has no public releases. If it is a private repository, please paste your GitHub Personal Access Token in the token field.`,
+        });
+      }
+      return res.status(releasesRes.status).json({
+        error: err.message || `GitHub API returned HTTP ${releasesRes.status}`,
+      });
+    }
+
+    const releases = await releasesRes.json();
+    if (!Array.isArray(releases) || releases.length === 0) {
+      return res.json({
+        success: true,
+        owner,
+        repo,
+        targetSearched: targetPattern,
+        count: 0,
+        matches: [],
+        message: `No Releases found in ${owner}/${repo}. Create a release under github.com/${owner}/${repo}/releases and attach your zip file.`,
+      });
+    }
+
+    const primaryMatches: any[] = [];
+    const otherReleaseAssets: any[] = [];
+
+    for (const rel of releases) {
+      if (Array.isArray(rel.assets)) {
+        for (const asset of rel.assets) {
+          const name = asset.name;
+          const nameLower = name.toLowerCase();
+
+          const isExact = nameLower === targetPattern;
+          const isTargetPrefix = nameLower.startsWith(targetPattern);
+          const isTargetArchive = (targetPattern === 'target' || targetPattern === 'target.zip') &&
+            /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz|iso|dmg)$/i.test(name);
+
+          const assetObj = {
+            name: asset.name,
+            size: asset.size,
+            downloadUrl: asset.browser_download_url,
+            source: 'release',
+            releaseTag: rel.tag_name,
+            releaseName: rel.name || rel.tag_name,
+            downloadCount: asset.download_count,
+            publishedAt: rel.published_at,
+          };
+
+          if (isExact || isTargetPrefix || isTargetArchive) {
+            primaryMatches.push(assetObj);
+          } else {
+            otherReleaseAssets.push(assetObj);
+          }
+        }
+      }
+    }
+
+    const allMatches = [...primaryMatches, ...otherReleaseAssets];
+
+    res.json({
+      success: true,
+      owner,
+      repo,
+      targetSearched: targetPattern,
+      count: allMatches.length,
+      primaryCount: primaryMatches.length,
+      matches: allMatches,
+    });
+  } catch (err: any) {
+    console.error('Error scanning GitHub releases:', err);
+    res.status(500).json({ error: 'Failed to scan GitHub releases: ' + (err.message || 'Network error') });
+  }
 });
 
 // 1. Health check
@@ -438,117 +583,7 @@ app.post('/api/upload/complete', async (req, res) => {
   }
 });
 
-// 5. GitHub Repo Scanner: looks for TARGET.zip, TARGET.7z, TARGET.* or compressed archives in releases and repo contents
-app.post('/api/github/scan', async (req, res) => {
-  try {
-    const { repoUrl, targetFilename, token } = req.body;
 
-    if (!repoUrl) {
-      return res.status(400).json({ error: 'GitHub repository URL or owner/repo is required.' });
-    }
-
-    const parsed = parseGitHubRepo(repoUrl);
-    if (!parsed) {
-      return res.status(400).json({ error: 'Invalid GitHub repository format. Use "owner/repo" or "https://github.com/owner/repo".' });
-    }
-
-    const { owner, repo } = parsed;
-    const headers: Record<string, string> = {
-      'User-Agent': 'VaultDrop-FileGrabber/1.0',
-      'Accept': 'application/vnd.github.v3+json',
-    };
-    if (token && token.trim()) {
-      headers['Authorization'] = `token ${token.trim()}`;
-    }
-
-    const targetPattern = targetFilename?.trim() || 'TARGET';
-    const matches: Array<{
-      name: string;
-      size: number;
-      downloadUrl: string;
-      source: 'release' | 'contents';
-      releaseTag?: string;
-      releaseName?: string;
-    }> = [];
-
-    // Check GitHub Releases first (supports free hosting up to 2GB per asset!)
-    try {
-      const releasesRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, { headers });
-      if (releasesRes.ok) {
-        const releases = await releasesRes.json();
-        if (Array.isArray(releases)) {
-          for (const rel of releases) {
-            if (Array.isArray(rel.assets)) {
-              for (const asset of rel.assets) {
-                const name = asset.name;
-                const isExact = name.toLowerCase() === targetPattern.toLowerCase();
-                const isTargetPrefix = name.toLowerCase().startsWith(targetPattern.toLowerCase());
-                const isArchive = /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz)$/i.test(name);
-
-                if (isExact || isTargetPrefix || (targetPattern === 'TARGET' && isArchive)) {
-                  matches.push({
-                    name: asset.name,
-                    size: asset.size,
-                    downloadUrl: asset.browser_download_url,
-                    source: 'release',
-                    releaseTag: rel.tag_name,
-                    releaseName: rel.name || rel.tag_name,
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('GitHub releases scan error:', e);
-    }
-
-    // Check root repository contents for files (e.g. TARGET.zip in repository tree)
-    try {
-      const contentsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents`, { headers });
-      if (contentsRes.ok) {
-        const contents = await contentsRes.json();
-        if (Array.isArray(contents)) {
-          for (const item of contents) {
-            if (item.type === 'file') {
-              const name = item.name;
-              const isExact = name.toLowerCase() === targetPattern.toLowerCase();
-              const isTargetPrefix = name.toLowerCase().startsWith(targetPattern.toLowerCase());
-              const isArchive = /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz)$/i.test(name);
-
-              if (isExact || isTargetPrefix || (targetPattern === 'TARGET' && isArchive)) {
-                // Ensure not already in matches from release
-                if (!matches.some((m) => m.name === item.name)) {
-                  matches.push({
-                    name: item.name,
-                    size: item.size,
-                    downloadUrl: item.download_url,
-                    source: 'contents',
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('GitHub contents scan error:', e);
-    }
-
-    res.json({
-      success: true,
-      owner,
-      repo,
-      targetSearched: targetPattern,
-      count: matches.length,
-      matches,
-    });
-  } catch (err: any) {
-    console.error('Error scanning GitHub:', err);
-    res.status(500).json({ error: 'Failed to scan GitHub repository: ' + (err.message || 'Network error') });
-  }
-});
 
 // 6. Import file from GitHub (Zero Hosting Cost Mode: uses GitHub CDN stream proxy)
 app.post('/api/github/import', (req, res) => {
