@@ -24,7 +24,9 @@ import {
   verifyLocalPassword,
   decodeStatelessShare,
   verifyStatelessPassword,
+  getStatelessDecryptedToken,
 } from '../utils/localShares';
+import { getSavedGitHubToken } from '../utils/cookieStorage';
 
 interface RecipientGateProps {
   shareId: string;
@@ -51,6 +53,13 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [downloadStarted, setDownloadStarted] = useState(false);
   const [copiedHash, setCopiedHash] = useState(false);
+  const [privateDownloadProgress, setPrivateDownloadProgress] = useState<{
+    active: boolean;
+    percent: number;
+    loaded: number;
+    total: number;
+    error?: string;
+  } | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -145,6 +154,10 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
         const isCorrect = verifyStatelessPassword(statelessPayload, password.trim());
         if (isCorrect) {
           verifiedToken = 'stateless_' + btoa(password.trim());
+          const fullInfo = decodeStatelessShare(statelessPayload, password.trim());
+          if (fullInfo) {
+            setShareInfo(fullInfo);
+          }
         } else {
           throw new Error('Incorrect password');
         }
@@ -195,14 +208,117 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
     }
   };
 
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+  };
+
+  const handlePrivateGitHubDownload = async (token?: string | null) => {
+    if (!shareInfo) return;
+    setPrivateDownloadProgress({ active: true, percent: 0, loaded: 0, total: shareInfo.fileSize || 0 });
+    try {
+      const repoClean = shareInfo.githubRepo?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+      const assetUrl =
+        shareInfo.githubAssetApiUrl ||
+        (shareInfo.githubAssetId && repoClean
+          ? `https://api.github.com/repos/${repoClean}/releases/assets/${shareInfo.githubAssetId}`
+          : null);
+
+      if (!assetUrl) {
+        if (shareInfo.githubDownloadUrl) {
+          window.open(shareInfo.githubDownloadUrl, '_blank');
+          return;
+        }
+        throw new Error('Release asset details not found for private repository.');
+      }
+
+      const headers: Record<string, string> = {
+        Accept: 'application/octet-stream',
+      };
+      if (token) {
+        headers['Authorization'] = `token ${token.trim()}`;
+      }
+
+      const res = await fetch(assetUrl, { headers });
+      if (!res.ok) {
+        throw new Error(`GitHub returned HTTP ${res.status} when accessing private release asset.`);
+      }
+
+      const total = parseInt(res.headers.get('content-length') || '0', 10) || shareInfo.fileSize || 0;
+
+      if (!res.body) {
+        const blob = await res.blob();
+        triggerBlobDownload(blob, shareInfo.filename || 'download.zip');
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          receivedBytes += value.length;
+          const pct = total > 0 ? Math.min(100, Math.round((receivedBytes / total) * 100)) : 0;
+          setPrivateDownloadProgress({
+            active: true,
+            percent: pct,
+            loaded: receivedBytes,
+            total: total || receivedBytes,
+          });
+        }
+      }
+
+      const finalBlob = new Blob(chunks as BlobPart[], { type: 'application/octet-stream' });
+      triggerBlobDownload(finalBlob, shareInfo.filename || 'download.zip');
+
+      setShareInfo((prev) => (prev ? { ...prev, downloadCount: (prev.downloadCount || 0) + 1 } : null));
+    } catch (err: any) {
+      setPrivateDownloadProgress({
+        active: false,
+        percent: 0,
+        loaded: 0,
+        total: 0,
+        error: err.message || 'Failed to download private release asset.',
+      });
+    } finally {
+      setTimeout(() => {
+        setPrivateDownloadProgress(null);
+      }, 6000);
+    }
+  };
+
   const handleDownload = () => {
     if (!accessToken && !shareInfo) return;
     setDownloadStarted(true);
 
-    if (shareInfo?.sourceType === 'github' && shareInfo.githubDownloadUrl) {
-      // Direct stream download from GitHub CDN
+    if (shareInfo?.sourceType === 'github') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const statelessPayload = urlParams.get('d');
+      const token =
+        shareInfo.githubToken ||
+        (statelessPayload ? getStatelessDecryptedToken(statelessPayload, password.trim()) : null) ||
+        getSavedGitHubToken() ||
+        undefined;
+
+      if (shareInfo.isPrivateRepo || token) {
+        handlePrivateGitHubDownload(token);
+        setTimeout(() => setDownloadStarted(false), 2000);
+        return;
+      }
+
+      // Direct stream download from public GitHub CDN
       const link = document.createElement('a');
-      link.href = shareInfo.githubDownloadUrl;
+      link.href = shareInfo.githubDownloadUrl || '#';
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       link.setAttribute('download', shareInfo?.filename || 'download');
@@ -440,13 +556,51 @@ export const RecipientGate: React.FC<RecipientGateProps> = ({
 
               <button
                 onClick={handleDownload}
-                className="w-full py-3 px-5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-sm font-bold flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-xs active:scale-[0.99]"
+                disabled={Boolean(privateDownloadProgress?.active)}
+                className={`w-full py-3 px-5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-sm font-bold flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-xs active:scale-[0.99] ${
+                  privateDownloadProgress?.active ? 'opacity-80 cursor-wait' : ''
+                }`}
               >
                 <Download className="w-4 h-4 text-emerald-400" />
                 <span>
-                  {downloadStarted ? 'Streaming Download...' : `Download File (${formatBytes(shareInfo.fileSize)})`}
+                  {privateDownloadProgress?.active
+                    ? `Streaming Private Release (${privateDownloadProgress.percent}%)...`
+                    : downloadStarted
+                    ? 'Streaming Download...'
+                    : `Download File (${formatBytes(shareInfo.fileSize)})`}
                 </span>
               </button>
+
+              {privateDownloadProgress?.active && (
+                <div className="p-4 bg-neutral-50 border border-neutral-200 rounded-xl space-y-2 text-left">
+                  <div className="flex items-center justify-between text-xs font-semibold text-neutral-800">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>Streaming from Private GitHub Release...</span>
+                    </span>
+                    <span className="font-mono tabular-nums">{privateDownloadProgress.percent}%</span>
+                  </div>
+                  <div className="w-full bg-neutral-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-emerald-600 h-2 rounded-full transition-all duration-150"
+                      style={{ width: `${privateDownloadProgress.percent}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-neutral-500 font-mono tabular-nums">
+                    <span>
+                      {formatBytes(privateDownloadProgress.loaded)} of {formatBytes(privateDownloadProgress.total)}
+                    </span>
+                    <span>Direct CDN Stream</span>
+                  </div>
+                </div>
+              )}
+
+              {privateDownloadProgress?.error && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-start gap-2 text-left">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{privateDownloadProgress.error}</span>
+                </div>
+              )}
 
               {/* SHA-256 Checksum */}
               {shareInfo.checksumSha256 && (

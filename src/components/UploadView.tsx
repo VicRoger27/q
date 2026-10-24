@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Upload,
   FolderArchive,
@@ -19,6 +19,9 @@ import {
   CloudLightning,
   ShieldCheck,
   Check,
+  Cookie,
+  Trash2,
+  HardDrive,
 } from 'lucide-react';
 import { UploadState, ShareItem, GitHubMatchedAsset } from '../types';
 import {
@@ -31,6 +34,12 @@ import {
 import { uploadLargeFile, zipFolderFiles } from '../utils/uploader';
 import { scanGitHubReleasesClient } from '../utils/github';
 import { saveLocalShare } from '../utils/localShares';
+import {
+  getSavedGitHubToken,
+  saveGitHubTokenToCookie,
+  clearSavedGitHubToken,
+  isRememberTokenEnabled,
+} from '../utils/cookieStorage';
 
 interface UploadViewProps {
   onUploadSuccess: (share: ShareItem, passwordUsed: string) => void;
@@ -54,11 +63,16 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
   const [githubRepoUrl, setGithubRepoUrl] = useState('');
   const [targetPattern, setTargetPattern] = useState('TARGET.zip');
   const [githubToken, setGithubToken] = useState('');
+  const [rememberTokenInCookie, setRememberTokenInCookie] = useState<boolean>(true);
+  const [isTokenSavedInCookie, setIsTokenSavedInCookie] = useState<boolean>(false);
+  const [cookieNotification, setCookieNotification] = useState<string | null>(null);
+  const [deviceOnlyPrivacy, setDeviceOnlyPrivacy] = useState<boolean>(true);
   const [isScanningGithub, setIsScanningGithub] = useState(false);
   const [githubMatches, setGithubMatches] = useState<GitHubMatchedAsset[]>([]);
   const [selectedGithubAsset, setSelectedGithubAsset] = useState<GitHubMatchedAsset | null>(null);
   const [githubScanError, setGithubScanError] = useState<string | null>(null);
   const [githubImporting, setGithubImporting] = useState(false);
+  const [showPrivateGuide, setShowPrivateGuide] = useState(false);
 
   // Upload progress state
   const [uploadState, setUploadState] = useState<UploadState | null>(null);
@@ -131,6 +145,52 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     }
   };
 
+  // Load saved token from device cookie on mount
+  useEffect(() => {
+    const saved = getSavedGitHubToken();
+    const remember = isRememberTokenEnabled();
+    setRememberTokenInCookie(remember);
+    if (saved) {
+      setGithubToken(saved);
+      setIsTokenSavedInCookie(true);
+    }
+  }, []);
+
+  const handleTokenChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setGithubToken(val);
+    if (rememberTokenInCookie && val.trim()) {
+      saveGitHubTokenToCookie(val.trim(), true);
+      setIsTokenSavedInCookie(true);
+    } else if (!val.trim()) {
+      clearSavedGitHubToken();
+      setIsTokenSavedInCookie(false);
+    }
+  };
+
+  const handleToggleRememberToken = (checked: boolean) => {
+    setRememberTokenInCookie(checked);
+    if (checked && githubToken.trim()) {
+      saveGitHubTokenToCookie(githubToken.trim(), true);
+      setIsTokenSavedInCookie(true);
+      setCookieNotification('Token saved in this device cookie');
+      setTimeout(() => setCookieNotification(null), 3000);
+    } else if (!checked) {
+      clearSavedGitHubToken();
+      setIsTokenSavedInCookie(false);
+      setCookieNotification('Token removed from device cookie');
+      setTimeout(() => setCookieNotification(null), 3000);
+    }
+  };
+
+  const handleClearSavedToken = () => {
+    clearSavedGitHubToken();
+    setGithubToken('');
+    setIsTokenSavedInCookie(false);
+    setCookieNotification('Token completely erased from device');
+    setTimeout(() => setCookieNotification(null), 3000);
+  };
+
   const handleGeneratePassword = () => {
     const generated = generateRandomPassword(14);
     setPassword(generated);
@@ -143,6 +203,11 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
     if (!githubRepoUrl.trim()) {
       setGithubScanError('Please enter a GitHub repository URL or owner/repo (e.g. VicRoger27/proj1).');
       return;
+    }
+
+    if (githubToken.trim() && rememberTokenInCookie) {
+      saveGitHubTokenToCookie(githubToken.trim(), true);
+      setIsTokenSavedInCookie(true);
     }
 
     setIsScanningGithub(true);
@@ -187,42 +252,54 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
       return;
     }
 
+    if (githubToken.trim() && rememberTokenInCookie) {
+      saveGitHubTokenToCookie(githubToken.trim(), true);
+      setIsTokenSavedInCookie(true);
+    }
+
     setGithubImporting(true);
     setErrorMessage(null);
 
     try {
       let createdShare: ShareItem | null = null;
 
-      // Attempt to register with backend proxy if available
-      try {
-        const res = await fetch('/api/github/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            repoUrl: githubRepoUrl.trim(),
-            downloadUrl: selectedGithubAsset.downloadUrl,
-            filename: selectedGithubAsset.name,
-            fileSize: selectedGithubAsset.size,
-            password: password.trim(),
-            title: title.trim() || selectedGithubAsset.name,
-            description: description.trim(),
-            expiryDays: expiryDays > 0 ? expiryDays : undefined,
-            releaseTag: selectedGithubAsset.releaseTag,
-          }),
-        });
+      // Only communicate with backend if device-only privacy mode is not strictly enforced.
+      // In device-only mode, the token NEVER leaves this machine over any network call to a server.
+      if (!deviceOnlyPrivacy) {
+        try {
+          const res = await fetch('/api/github/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repoUrl: githubRepoUrl.trim(),
+              downloadUrl: selectedGithubAsset.downloadUrl,
+              filename: selectedGithubAsset.name,
+              fileSize: selectedGithubAsset.size,
+              password: password.trim(),
+              title: title.trim() || selectedGithubAsset.name,
+              description: description.trim(),
+              expiryDays: expiryDays > 0 ? expiryDays : undefined,
+              releaseTag: selectedGithubAsset.releaseTag,
+              assetId: selectedGithubAsset.id,
+              assetApiUrl: selectedGithubAsset.apiUrl,
+              token: githubToken.trim() || undefined,
+              isPrivate: Boolean(githubToken.trim()),
+            }),
+          });
 
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const data = await res.json();
-          if (res.ok && data.share) {
-            createdShare = data.share;
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json();
+            if (res.ok && data.share) {
+              createdShare = data.share;
+            }
           }
+        } catch (backendErr) {
+          console.warn('Backend /api/github/import unavailable, continuing with client-side fallback:', backendErr);
         }
-      } catch (backendErr) {
-        console.warn('Backend /api/github/import unavailable, continuing with client-side fallback:', backendErr);
       }
 
-      // If backend is not running (e.g. static Vercel deployment), generate client share
+      // Generate client-side encrypted share item
       if (!createdShare) {
         const shareId = 'gh_' + Math.random().toString(36).substring(2, 10);
         const expiresAt = expiryDays > 0 ? new Date(Date.now() + expiryDays * 86400000).toISOString() : null;
@@ -242,6 +319,10 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
           githubRepo: githubRepoUrl.trim(),
           githubReleaseTag: selectedGithubAsset.releaseTag,
           githubDownloadUrl: selectedGithubAsset.downloadUrl,
+          githubAssetId: selectedGithubAsset.id,
+          githubAssetApiUrl: selectedGithubAsset.apiUrl,
+          githubToken: githubToken.trim() || undefined,
+          isPrivateRepo: Boolean(githubToken.trim()),
           downloadCount: 0,
         };
       }
@@ -778,7 +859,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
               {/* Search Form */}
               <form onSubmit={handleScanGithub} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                  <div className="md:col-span-6 space-y-1.5">
+                  <div className="md:col-span-5 space-y-1.5">
                     <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider flex items-center justify-between">
                       <span>GitHub Repository or Release URL</span>
                     </label>
@@ -786,7 +867,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                       type="text"
                       value={githubRepoUrl}
                       onChange={(e) => setGithubRepoUrl(e.target.value)}
-                      placeholder="e.g. VicRoger27/q or https://github.com/..."
+                      placeholder="e.g. VicRoger27/proj1 or https://github.com/..."
                       required
                       className="w-full px-3.5 py-2.5 bg-neutral-50 border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                     />
@@ -806,19 +887,133 @@ export const UploadView: React.FC<UploadViewProps> = ({ onUploadSuccess, domain 
                     />
                   </div>
 
-                  <div className="md:col-span-3 space-y-1.5">
-                    <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider">
-                      GitHub Token <span className="text-neutral-400 font-normal">(Private)</span>
-                    </label>
+                  <div className="md:col-span-4 space-y-1.5">
+                    <div className="flex items-center justify-between flex-wrap gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-neutral-800 uppercase tracking-wider">
+                          GitHub Token
+                        </label>
+                        {isTokenSavedInCookie && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300">
+                            <Cookie className="w-2.5 h-2.5 text-emerald-700" />
+                            <span>Saved in Cookie</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {(githubToken || isTokenSavedInCookie) && (
+                          <button
+                            type="button"
+                            onClick={handleClearSavedToken}
+                            title="Clear token and wipe cookie from this device"
+                            className="text-[11px] font-medium text-neutral-500 hover:text-rose-600 flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Clear</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowPrivateGuide(!showPrivateGuide)}
+                          className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
+                        >
+                          <ShieldCheck className="w-3 h-3" />
+                          <span>{showPrivateGuide ? 'Hide Guide' : 'Private Repo?'}</span>
+                        </button>
+                      </div>
+                    </div>
                     <input
                       type="password"
                       value={githubToken}
-                      onChange={(e) => setGithubToken(e.target.value)}
-                      placeholder="ghp_... for private repos"
+                      onChange={handleTokenChange}
+                      placeholder="github_pat_... or ghp_..."
                       className="w-full px-3.5 py-2.5 bg-neutral-50 border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                     />
+
+                    {/* Cookie storage toggle & notification */}
+                    <div className="flex items-center justify-between pt-0.5">
+                      <label className="flex items-center gap-1.5 text-[11px] text-neutral-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={rememberTokenInCookie}
+                          onChange={(e) => handleToggleRememberToken(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-neutral-300 cursor-pointer"
+                        />
+                        <span>Save token in this device's cookie</span>
+                      </label>
+                      {cookieNotification && (
+                        <span className="text-[10px] text-emerald-700 font-medium">
+                          {cookieNotification}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-start gap-1.5 p-2 bg-emerald-50/70 border border-emerald-200/70 rounded-md text-[11px] text-emerald-900 leading-tight">
+                      <HardDrive className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Device-only privacy:</strong> Saved in your browser's <code className="bg-white/80 px-1 py-0.2 rounded font-mono text-emerald-800">SameSite=Strict</code> cookie. It stays on your device and scans GitHub directly without routing through external servers.
+                      </span>
+                    </div>
                   </div>
                 </div>
+
+                {showPrivateGuide && (
+                  <div className="p-4 bg-neutral-900 text-white rounded-xl space-y-3.5 text-xs leading-relaxed border border-neutral-800 animate-fadeIn">
+                    <div className="flex items-center justify-between font-bold text-sm text-white">
+                      <span className="flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-emerald-400" />
+                        <span>Using a Private GitHub Repository (All Current & Future Repos)</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowPrivateGuide(false)}
+                        className="text-neutral-400 hover:text-white cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <p className="text-neutral-300 text-[11px]">
+                      If you couldn't find "Contents", that means you are on the standard <strong>Tokens (classic)</strong> page! On Classic tokens, there is no "Contents" checkbox — the single permission to check is simply <strong><code className="text-emerald-300 font-mono bg-neutral-800 px-1.5 py-0.5 rounded">repo</code></strong>, which automatically grants access to <strong>all current and future repositories</strong>.
+                    </p>
+
+                    <div className="p-3 bg-neutral-800/80 rounded-lg border border-neutral-700/80 space-y-2">
+                      <div className="text-emerald-400 font-bold text-xs flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Method 1: Tokens (classic) — 1-Click for ALL Repos (Recommended)</span>
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1.5 text-neutral-200 text-[11px]">
+                        <li>
+                          Open GitHub's token generator directly: <a href="https://github.com/settings/tokens/new?scopes=repo&description=VaultDrop" target="_blank" rel="noopener noreferrer" className="text-emerald-300 underline font-mono break-all hover:text-emerald-200">github.com/settings/tokens/new?scopes=repo</a>
+                        </li>
+                        <li>
+                          Make sure the single checkbox named <strong className="text-emerald-400">repo</strong> (Full control of private repositories) is checked.
+                        </li>
+                        <li>
+                          Click <strong>Generate token</strong> at the bottom.
+                        </li>
+                        <li>
+                          Copy your token (starts with <code className="text-neutral-300 font-mono">ghp_...</code>) and paste it into the <strong>GitHub Token</strong> box above.
+                        </li>
+                      </ol>
+                      <p className="text-[10px] text-neutral-400">
+                        This token will automatically work for <code className="text-neutral-300 font-mono">VicRoger27/proj1</code> and <strong>any future private repo</strong> you create.
+                      </p>
+                    </div>
+
+                    <div className="p-2.5 bg-neutral-800/40 rounded-lg border border-neutral-700/50 space-y-1 text-neutral-300 text-[11px]">
+                      <div className="font-semibold text-neutral-200 text-xs">
+                        Method 2: If using Fine-Grained Tokens instead
+                      </div>
+                      <p>
+                        Under <strong>Repository access</strong>, choose <strong>"All repositories"</strong> (grants access to current & future repos). Under <strong>Repository permissions</strong>, expand the list and set <strong>Contents</strong> to <strong className="text-emerald-400">Read-only</strong>.
+                      </p>
+                    </div>
+
+                    <p className="text-[11px] text-neutral-400">
+                      VaultDrop encrypts your token using your download password via AES-256 before generating the share link. Visitors only receive access when they enter the correct password.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-neutral-500">

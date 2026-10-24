@@ -41,6 +41,38 @@ export function verifyLocalPassword(shareId: string, passwordAttempt: string): b
   }
 }
 
+// Simple synchronous symmetric string encryption with password so private tokens are never in plaintext in URLs
+function encryptSecretWithPassword(secret: string, password: string): string {
+  try {
+    const enc = new TextEncoder();
+    const sBytes = enc.encode(secret);
+    const pBytes = enc.encode(password);
+    const out = new Uint8Array(sBytes.length);
+    for (let i = 0; i < sBytes.length; i++) {
+      out[i] = sBytes[i] ^ pBytes[i % pBytes.length];
+    }
+    return btoa(String.fromCharCode(...out));
+  } catch {
+    return '';
+  }
+}
+
+function decryptSecretWithPassword(encrypted: string, password: string): string {
+  try {
+    const raw = atob(encrypted);
+    const sBytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) sBytes[i] = raw.charCodeAt(i);
+    const pBytes = new TextEncoder().encode(password);
+    const out = new Uint8Array(sBytes.length);
+    for (let i = 0; i < sBytes.length; i++) {
+      out[i] = sBytes[i] ^ pBytes[i % pBytes.length];
+    }
+    return new TextDecoder().decode(out);
+  } catch {
+    return '';
+  }
+}
+
 export function encodeStatelessShare(share: ShareItem, password?: string): string {
   try {
     const payload = {
@@ -51,6 +83,10 @@ export function encodeStatelessShare(share: ShareItem, password?: string): strin
       url: share.githubDownloadUrl,
       repo: share.githubRepo,
       tag: share.githubReleaseTag,
+      aid: share.githubAssetId,
+      aurl: share.githubAssetApiUrl,
+      priv: share.isPrivateRepo ? 1 : undefined,
+      tok: share.githubToken && password ? encryptSecretWithPassword(share.githubToken.trim(), password.trim()) : undefined,
       h: password ? btoa(password.trim()) : undefined,
     };
     return btoa(unescape(encodeURIComponent(JSON.stringify(payload))))
@@ -62,11 +98,17 @@ export function encodeStatelessShare(share: ShareItem, password?: string): strin
   }
 }
 
-export function decodeStatelessShare(encoded: string): ShareItem | null {
+export function decodeStatelessShare(encoded: string, passwordAttempt?: string): ShareItem | null {
   try {
     let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
     while (base64.length % 4) base64 += '=';
     const json = JSON.parse(decodeURIComponent(escape(atob(base64))));
+
+    let decryptedToken: string | undefined = undefined;
+    if (json.tok && passwordAttempt) {
+      decryptedToken = decryptSecretWithPassword(json.tok, passwordAttempt.trim());
+    }
+
     return {
       id: json.id || 'gh_share',
       title: json.t || json.fn,
@@ -82,8 +124,24 @@ export function decodeStatelessShare(encoded: string): ShareItem | null {
       githubRepo: json.repo,
       githubReleaseTag: json.tag,
       githubDownloadUrl: json.url,
+      githubAssetId: json.aid,
+      githubAssetApiUrl: json.aurl,
+      isPrivateRepo: Boolean(json.priv || json.tok),
+      githubToken: decryptedToken,
       downloadCount: 0,
     };
+  } catch {
+    return null;
+  }
+}
+
+export function getStatelessDecryptedToken(encoded: string, passwordAttempt: string): string | null {
+  try {
+    let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    const json = JSON.parse(decodeURIComponent(escape(atob(base64))));
+    if (!json.tok) return null;
+    return decryptSecretWithPassword(json.tok, passwordAttempt.trim()) || null;
   } catch {
     return null;
   }
@@ -100,4 +158,5 @@ export function verifyStatelessPassword(encoded: string, passwordAttempt: string
     return false;
   }
 }
+
 

@@ -17,12 +17,18 @@ export interface ShareItem {
   githubRepo?: string;
   githubReleaseTag?: string;
   githubDownloadUrl?: string;
+  githubAssetId?: number;
+  githubAssetApiUrl?: string;
+  githubToken?: string;
+  isPrivateRepo?: boolean;
 }
 
 export interface GitHubMatchedAsset {
+  id?: number;
   name: string;
   size: number;
   downloadUrl: string;
+  apiUrl?: string;
   source: 'release' | 'contents';
   releaseTag?: string;
   releaseName?: string;

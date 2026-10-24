@@ -42,6 +42,10 @@ export interface ShareRecord {
   githubDownloadUrl?: string;
   githubRepo?: string;
   githubReleaseTag?: string;
+  githubAssetId?: number;
+  githubAssetApiUrl?: string;
+  githubToken?: string;
+  isPrivateRepo?: boolean;
 }
 
 // In-memory rate limiting for password attempts: key = `${shareId}:${ip}` -> { count: number, lockedUntil: number }
@@ -598,6 +602,10 @@ app.post('/api/github/import', (req, res) => {
       description,
       expiryDays,
       releaseTag,
+      assetId,
+      assetApiUrl,
+      token,
+      isPrivate,
     } = req.body;
 
     if (!downloadUrl || !filename) {
@@ -637,6 +645,10 @@ app.post('/api/github/import', (req, res) => {
       githubDownloadUrl: downloadUrl,
       githubRepo: repoUrl,
       githubReleaseTag: releaseTag,
+      githubAssetId: assetId,
+      githubAssetApiUrl: assetApiUrl,
+      githubToken: token,
+      isPrivateRepo: Boolean(isPrivate || token),
     };
 
     const shares = loadShares();
@@ -811,25 +823,49 @@ app.get('/api/shares/:id/download', async (req, res) => {
     saveShares(shares);
 
     // Case 1: GitHub Hosted File (Zero Hosting Cost) -> Stream from GitHub CDN
-    if (share.sourceType === 'github' && share.githubDownloadUrl) {
+    if (share.sourceType === 'github') {
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.filename)}"`);
       res.setHeader('Content-Type', share.fileType || 'application/octet-stream');
       if (share.fileSize > 0) {
         res.setHeader('Content-Length', share.fileSize);
       }
 
-      // Stream fetch from GitHub CDN
-      const ghStreamRes = await fetch(share.githubDownloadUrl);
-      if (!ghStreamRes.ok || !ghStreamRes.body) {
-        // Fallback: direct browser redirect to CDN
-        return res.redirect(share.githubDownloadUrl);
+      // Private GitHub release asset streaming
+      if (share.githubAssetId && share.githubToken) {
+        const repoClean = share.githubRepo?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+        const assetApiUrl =
+          share.githubAssetApiUrl ||
+          `https://api.github.com/repos/${repoClean}/releases/assets/${share.githubAssetId}`;
+        const ghAssetRes = await fetch(assetApiUrl, {
+          headers: {
+            Authorization: `token ${share.githubToken.trim()}`,
+            Accept: 'application/octet-stream',
+            'User-Agent': 'VaultDrop-Streamer/2.0',
+          },
+        });
+
+        if (ghAssetRes.ok && ghAssetRes.body) {
+          // @ts-ignore: web stream to node stream piping
+          const { Readable } = await import('stream');
+          // @ts-ignore
+          const nodeStream = Readable.fromWeb(ghAssetRes.body);
+          return nodeStream.pipe(res);
+        }
       }
 
-      // @ts-ignore: web stream to node stream piping
-      const { Readable } = await import('stream');
-      // @ts-ignore
-      const nodeStream = Readable.fromWeb(ghStreamRes.body);
-      return nodeStream.pipe(res);
+      if (share.githubDownloadUrl) {
+        // Stream fetch from public GitHub CDN
+        const ghStreamRes = await fetch(share.githubDownloadUrl);
+        if (!ghStreamRes.ok || !ghStreamRes.body) {
+          return res.redirect(share.githubDownloadUrl);
+        }
+
+        // @ts-ignore: web stream to node stream piping
+        const { Readable } = await import('stream');
+        // @ts-ignore
+        const nodeStream = Readable.fromWeb(ghStreamRes.body);
+        return nodeStream.pipe(res);
+      }
     }
 
     // Case 2: Local AES-256 Encrypted File -> Decrypt on-the-fly and pipe to response

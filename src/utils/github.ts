@@ -56,14 +56,45 @@ export async function scanGitHubReleasesClient(
 
   // Direct asset link provided
   if (directAsset) {
+    let resolvedId: number | undefined = undefined;
+    let resolvedSize = 0;
+    let resolvedApiUrl: string | undefined = undefined;
+
+    // If token provided or accessible, look up release asset id for private download support
+    try {
+      const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
+      if (token && token.trim()) headers['Authorization'] = `token ${token.trim()}`;
+      const tagRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(directAsset.tag)}`,
+        { headers }
+      );
+      if (tagRes.ok) {
+        const tagJson = await tagRes.json();
+        if (Array.isArray(tagJson.assets)) {
+          const match = tagJson.assets.find(
+            (a: any) => a.name.toLowerCase() === directAsset.filename.toLowerCase()
+          );
+          if (match) {
+            resolvedId = match.id;
+            resolvedSize = match.size || 0;
+            resolvedApiUrl = match.url;
+          }
+        }
+      }
+    } catch {
+      // Ignore lookup failure for public fallback
+    }
+
     return {
       owner,
       repo,
       matches: [
         {
+          id: resolvedId,
           name: directAsset.filename,
-          size: 0,
+          size: resolvedSize,
           downloadUrl: directAsset.directUrl,
+          apiUrl: resolvedApiUrl,
           source: 'release',
           releaseTag: directAsset.tag,
           releaseName: `Direct Release Asset (${directAsset.tag})`,
@@ -85,7 +116,7 @@ export async function scanGitHubReleasesClient(
   if (!ghRes.ok) {
     if (ghRes.status === 404) {
       throw new Error(
-        `Repository "${owner}/${repo}" was not found or is Private. If private, make it Public on GitHub or provide a Personal Access Token.`
+        `Repository "${owner}/${repo}" was not found or is Private. If private, enter your GitHub Personal Access Token in the Token field below.`
       );
     }
     const errJson = await ghRes.json().catch(() => ({}));
@@ -116,9 +147,11 @@ export async function scanGitHubReleasesClient(
           /\.(zip|7z|tar\.gz|tgz|rar|gz|bz2|xz|iso|dmg)$/i.test(name);
 
         const item: GitHubMatchedAsset = {
+          id: asset.id,
           name: asset.name,
           size: asset.size,
           downloadUrl: asset.browser_download_url,
+          apiUrl: asset.url,
           source: 'release',
           releaseTag: rel.tag_name,
           releaseName: rel.name || rel.tag_name,
